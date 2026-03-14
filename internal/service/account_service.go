@@ -2,18 +2,13 @@ package service
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"encoding/base64"
-	"errors"
 	"fmt"
-	"io"
 	"log"
 	"sync"
 	"time"
 
 	"webmail_engine/internal/cache"
+	"webmail_engine/internal/crypto"
 	"webmail_engine/internal/models"
 	"webmail_engine/internal/pool"
 	"webmail_engine/internal/scheduler"
@@ -22,14 +17,14 @@ import (
 
 // AccountService manages email accounts
 type AccountService struct {
-	mu         sync.RWMutex
-	store      store.AccountStore
-	pool       *pool.ConnectionPool
-	cache      *cache.Cache
-	scheduler  *scheduler.FairUseScheduler
-	syncMgr    *SyncManager
-	encryptKey []byte
-	nextID     int
+	mu        sync.RWMutex
+	store     store.AccountStore
+	pool      *pool.ConnectionPool
+	cache     *cache.Cache
+	scheduler *scheduler.FairUseScheduler
+	syncMgr   *SyncManager
+	encryptor *crypto.Encryptor
+	nextID    int
 }
 
 // AccountServiceConfig holds service configuration
@@ -47,19 +42,19 @@ func NewAccountService(
 	syncMgr *SyncManager,
 	config AccountServiceConfig,
 ) (*AccountService, error) {
-	encryptKey, err := parseEncryptionKey(config.EncryptionKey)
+	encryptor, err := crypto.NewEncryptor(config.EncryptionKey)
 	if err != nil {
 		return nil, fmt.Errorf("invalid encryption key: %w", err)
 	}
 
 	return &AccountService{
-		store:      str,
-		pool:       pool,
-		cache:      cache,
-		scheduler:  scheduler,
-		syncMgr:    syncMgr,
-		encryptKey: encryptKey,
-		nextID:     1,
+		store:     str,
+		pool:      pool,
+		cache:     cache,
+		scheduler: scheduler,
+		syncMgr:   syncMgr,
+		encryptor: encryptor,
+		nextID:    1,
 	}, nil
 }
 
@@ -70,7 +65,7 @@ func (s *AccountService) SetSyncManager(syncMgr *SyncManager) {
 	s.syncMgr = syncMgr
 }
 
-// AddAccount adds a new email account (or updates if credentials differ)
+// AddAccount adds a new email account (or updates if account already exists)
 func (s *AccountService) AddAccount(ctx context.Context, req models.AddAccountRequest) (*models.AddAccountResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -78,26 +73,8 @@ func (s *AccountService) AddAccount(ctx context.Context, req models.AddAccountRe
 	// Check for existing account with same email in store
 	existing, err := s.store.GetByEmail(ctx, req.Email)
 	if err == nil {
-		// Account exists, check if config is the same
-		if s.isAccountConfigSame(existing, req) {
-			// Same config, return existing account
-			log.Printf("Account %s already exists with same configuration", req.Email)
-			return &models.AddAccountResponse{
-				AccountID:             existing.ID,
-				Status:                existing.Status,
-				ConnectionEstablished: true,
-				InitialSyncStatus:     "already_running",
-				InitialSyncProgress:   100,
-				MessageCount:          0,
-				ResourceAllocation: models.ResourceStatus{
-					CurrentConnections: s.pool.GetAccountConnectionCount(existing.ID),
-					MaxConnections:     existing.ConnectionLimit,
-				},
-			}, nil
-		}
-
-		// Different config, update the account
-		log.Printf("Account %s exists with different configuration, updating...", req.Email)
+		// Account exists, always update to re-encrypt password with current key
+		log.Printf("Account %s already exists, updating configuration...", req.Email)
 		return s.updateAccountConfig(ctx, existing, req)
 	} else if !store.IsNotFound(err) {
 		return nil, fmt.Errorf("failed to check for existing account: %w", err)
@@ -135,7 +112,7 @@ func (s *AccountService) AddAccount(ctx context.Context, req models.AddAccountRe
 	}
 
 	// Encrypt password
-	encryptedPassword, err := s.encrypt(req.Password)
+	encryptedPassword, err := s.encryptor.Encrypt(req.Password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt password: %w", err)
 	}
@@ -202,18 +179,6 @@ func (s *AccountService) AddAccount(ctx context.Context, req models.AddAccountRe
 	}, nil
 }
 
-// isAccountConfigSame checks if two account configurations are identical
-func (s *AccountService) isAccountConfigSame(acc *models.Account, req models.AddAccountRequest) bool {
-	return acc.AuthType == req.AuthType &&
-		acc.IMAPConfig.Host == req.IMAPHost &&
-		acc.IMAPConfig.Port == req.IMAPPort &&
-		acc.IMAPConfig.Encryption == req.IMAPEncryption &&
-		acc.SMTPConfig.Host == req.SMTPHost &&
-		acc.SMTPConfig.Port == req.SMTPPort &&
-		acc.SMTPConfig.Encryption == req.SMTPEncryption &&
-		acc.ConnectionLimit == req.ConnectionLimit
-}
-
 // updateAccountConfig updates an existing account with new configuration
 func (s *AccountService) updateAccountConfig(ctx context.Context, acc *models.Account, req models.AddAccountRequest) (*models.AddAccountResponse, error) {
 	// Verify new connection first
@@ -233,7 +198,7 @@ func (s *AccountService) updateAccountConfig(ctx context.Context, acc *models.Ac
 	}
 
 	// Encrypt new password
-	encryptedPassword, err := s.encrypt(req.Password)
+	encryptedPassword, err := s.encryptor.Encrypt(req.Password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt password: %w", err)
 	}
@@ -312,24 +277,24 @@ func (s *AccountService) GetAccountWithCredentials(ctx context.Context, accountI
 	// Decrypt passwords
 	accountCopy := *account
 	if account.IMAPConfig.Password != "" {
-		password, err := s.decrypt(account.IMAPConfig.Password)
-		if err == nil {
-			accountCopy.IMAPConfig.Password = password
-			log.Printf("[DEBUG] IMAP password decrypted successfully for %s (length: %d)", accountID, len(password))
-		} else {
-			log.Printf("Warning: Failed to decrypt IMAP password for account %s: %v", accountID, err)
+		password, err := s.encryptor.Decrypt(account.IMAPConfig.Password)
+		if err != nil {
+			log.Printf("Failed to decrypt IMAP password for account %s: %v", accountID, err)
+			return nil, fmt.Errorf("IMAP password decryption failed: %w", models.ErrPasswordDecryptionFailed)
 		}
+		accountCopy.IMAPConfig.Password = password
+		log.Printf("[DEBUG] IMAP password decrypted successfully for %s (length: %d)", accountID, len(password))
 	} else {
 		log.Printf("[DEBUG] IMAP password is empty for account %s", accountID)
 	}
 	if account.SMTPConfig.Password != "" {
-		password, err := s.decrypt(account.SMTPConfig.Password)
-		if err == nil {
-			accountCopy.SMTPConfig.Password = password
-			log.Printf("[DEBUG] SMTP password decrypted successfully for %s (length: %d)", accountID, len(password))
-		} else {
-			log.Printf("Warning: Failed to decrypt SMTP password for account %s: %v", accountID, err)
+		password, err := s.encryptor.Decrypt(account.SMTPConfig.Password)
+		if err != nil {
+			log.Printf("Failed to decrypt SMTP password for account %s: %v", accountID, err)
+			return nil, fmt.Errorf("SMTP password decryption failed: %w", models.ErrPasswordDecryptionFailed)
 		}
+		accountCopy.SMTPConfig.Password = password
+		log.Printf("[DEBUG] SMTP password decrypted successfully for %s (length: %d)", accountID, len(password))
 	} else {
 		log.Printf("[DEBUG] SMTP password is empty for account %s", accountID)
 	}
@@ -560,59 +525,6 @@ func (s *AccountService) verifyConnectionWithRawPassword(ctx context.Context, re
 	return nil
 }
 
-// encrypt encrypts data using AES-GCM
-func (s *AccountService) encrypt(plaintext string) (string, error) {
-	block, err := aes.NewCipher(s.encryptKey)
-	if err != nil {
-		return "", err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", err
-	}
-
-	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
-	return base64.StdEncoding.EncodeToString(ciphertext), nil
-}
-
-// decrypt decrypts data using AES-GCM
-func (s *AccountService) decrypt(ciphertextStr string) (string, error) {
-	data, err := base64.StdEncoding.DecodeString(ciphertextStr)
-	if err != nil {
-		return "", err
-	}
-
-	block, err := aes.NewCipher(s.encryptKey)
-	if err != nil {
-		return "", err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-
-	nonceSize := gcm.NonceSize()
-	if len(data) < nonceSize {
-		return "", errors.New("ciphertext too short")
-	}
-
-	nonce := data[:nonceSize]
-	ciphertext := data[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return "", err
-	}
-
-	return string(plaintext), nil
-}
-
 // calculateHealthScore calculates a health score for an account
 func (s *AccountService) calculateHealthScore(account *models.Account) int {
 	score := 100
@@ -655,20 +567,6 @@ func (s *AccountService) calculateHealthStatus(account *models.Account) models.H
 	}
 
 	return models.HealthStatusHealthy
-}
-
-// parseEncryptionKey parses the encryption key
-func parseEncryptionKey(key string) ([]byte, error) {
-	if key == "" {
-		// Use default key (in production, this should be configured)
-		key = "default-encryption-key-32-bytes!"
-	}
-
-	if len(key) != 32 {
-		return nil, fmt.Errorf("encryption key must be 32 bytes")
-	}
-
-	return []byte(key), nil
 }
 
 // stripSensitiveData returns a copy of the account without sensitive fields

@@ -6,16 +6,17 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"webmail_engine/internal/models"
 	"webmail_engine/internal/service"
+
+	"github.com/gin-gonic/gin"
 )
 
 // APIHandler handles HTTP API requests
 type APIHandler struct {
-	accountService  *service.AccountService
-	messageService  *service.MessageService
-	sendService     *service.SendService
+	accountService *service.AccountService
+	messageService *service.MessageService
+	sendService    *service.SendService
 }
 
 // NewAPIHandler creates a new API handler
@@ -385,6 +386,10 @@ func respondError(c *gin.Context, err error) {
 		apiErr = models.NewConflictError("Account", "unknown")
 	case err == models.ErrAuthenticationFailed:
 		apiErr = models.NewAuthError("Invalid credentials")
+	case err == models.ErrMailServerAuthFailed:
+		apiErr = models.NewAuthError("Invalid mail server credentials")
+	case err == models.ErrPasswordDecryptionFailed:
+		apiErr = models.NewAuthError("Unable to decrypt stored credentials - please re-authenticate")
 	case err == models.ErrInsufficientTokens:
 		apiErr = models.NewThrottleError(60)
 	default:

@@ -8,8 +8,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"strings"
 	"syscall"
+	"webmail_engine"
 
 	"webmail_engine/internal/api"
 	"webmail_engine/internal/cache"
@@ -23,11 +24,13 @@ import (
 	"webmail_engine/internal/webhook"
 
 	"github.com/gin-gonic/gin"
+	"github.com/olivere/vite"
 )
 
 func main() {
 	// Parse command line flags
 	configPath := flag.String("config", "", "Path to configuration file")
+	isDev := flag.Bool("dev", false, "Run in development mode (with Vite dev server)")
 	flag.Parse()
 
 	// Load configuration
@@ -168,6 +171,8 @@ func main() {
 		connPool,
 		fairUseScheduler,
 		attachmentStorage,
+		accountStore,
+		cfg.Security.EncryptionKey,
 		service.SendServiceConfig{
 			MaxRetries:      cfg.Webhook.MaxRetries,
 			SendTimeout:     cfg.Webhook.Timeout,
@@ -213,14 +218,46 @@ func main() {
 		c.String(http.StatusOK, "OK")
 	})
 
-	// Serve static files or fallback to index.html using NoRoute to avoid path conflicts
+	// Initialize Vite handler for frontend
+	var viteHandler *vite.Handler
+	if *isDev {
+		log.Println("Starting in development mode with Vite dev server")
+		viteHandler, err = vite.NewHandler(vite.Config{
+			FS:        os.DirFS("./frontend"),
+			IsDev:     true,
+			ViteURL:   "http://localhost:5173",
+			ViteEntry: "src/main.tsx",
+		})
+		if err != nil {
+			log.Fatalf("Failed to initialize Vite handler: %v", err)
+		}
+	} else {
+		log.Println("Starting in production mode with embedded frontend assets")
+		viteHandler, err = vite.NewHandler(vite.Config{
+			FS:    webmail_engine.GetDistFS(),
+			IsDev: false,
+		})
+		if err != nil {
+			log.Fatalf("Failed to initialize Vite handler: %v", err)
+		}
+	}
+
+	// Register Vite handler for frontend routes (SPA support)
 	router.NoRoute(func(c *gin.Context) {
-		fpath := filepath.Join("./web", c.Request.URL.Path)
-		if info, err := os.Stat(fpath); err == nil && !info.IsDir() {
-			c.File(fpath)
+		// Skip API routes
+		if strings.HasPrefix(c.Request.URL.Path, "/v1/") || c.Request.URL.Path == "/health" {
+			c.Status(http.StatusNotFound)
 			return
 		}
-		c.File("./web/index.html")
+
+		// For dev mode, proxy to Vite dev server
+		if *isDev {
+			viteHandler.ServeHTTP(c.Writer, c.Request)
+			return
+		}
+
+		// For production mode, serve index.html for SPA routing
+		c.File("./frontend/dist/index.html")
 	})
 
 	// Create HTTP server

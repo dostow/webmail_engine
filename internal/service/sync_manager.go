@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -12,12 +14,12 @@ import (
 
 // SyncManager manages background synchronization for all accounts
 type SyncManager struct {
-	mu            sync.RWMutex
+	mu             sync.RWMutex
 	messageService *MessageService
 	accountService *AccountService
-	syncTasks     map[string]*SyncTask
-	globalCtx     context.Context
-	globalCancel  context.CancelFunc
+	syncTasks      map[string]*SyncTask
+	globalCtx      context.Context
+	globalCancel   context.CancelFunc
 }
 
 // SyncTask represents a background sync task for an account
@@ -36,7 +38,7 @@ type SyncTask struct {
 // NewSyncManager creates a new sync manager
 func NewSyncManager(msgService *MessageService, accService *AccountService) *SyncManager {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	return &SyncManager{
 		messageService: msgService,
 		accountService: accService,
@@ -149,7 +151,7 @@ func (m *SyncManager) runSyncLoop(task *SyncTask) {
 			task.LastSync = time.Now()
 
 			count, err := m.executeSync(task.AccountID)
-			
+
 			task.MessagesSynced = count
 			task.LastError = err
 			task.IsRunning = false
@@ -191,6 +193,12 @@ func (m *SyncManager) executeSync(accountID string) (int, error) {
 
 	client, err := pool.ConnectIMAPv2(context.Background(), imapConfig)
 	if err != nil {
+		// Check for authentication errors
+		if errors.Is(err, models.ErrMailServerAuthFailed) {
+			// Mark account as requiring authentication
+			account.Status = models.AccountStatusAuthRequired
+			return 0, fmt.Errorf("authentication failed: %w", err)
+		}
 		return 0, err
 	}
 	defer client.Close()

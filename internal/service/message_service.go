@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -116,6 +117,10 @@ func (s *MessageService) GetMessageList(
 	client, err := pool.ConnectIMAPv2(imapCtx, imapConfig)
 	if err != nil {
 		log.Printf("IMAP connection failed: %v", err)
+		// Check for authentication errors
+		if errors.Is(err, models.ErrMailServerAuthFailed) {
+			return nil, models.NewAuthError("Invalid mail server credentials")
+		}
 		return nil, models.NewServiceUnavailableError("IMAP server", err.Error())
 	}
 	defer client.Close()
@@ -237,6 +242,10 @@ func (s *MessageService) GetMessage(
 
 	client, err := pool.ConnectIMAPv2(imapCtx, imapConfig)
 	if err != nil {
+		// Check for authentication errors
+		if errors.Is(err, models.ErrMailServerAuthFailed) {
+			return nil, models.NewAuthError("Invalid mail server credentials")
+		}
 		return nil, models.NewServiceUnavailableError("IMAP server", err.Error())
 	}
 	defer client.Close()
@@ -317,6 +326,10 @@ func (s *MessageService) SearchMessages(
 
 	client, err := pool.ConnectIMAPv2(imapCtx, imapConfig)
 	if err != nil {
+		// Check for authentication errors
+		if errors.Is(err, models.ErrMailServerAuthFailed) {
+			return nil, models.NewAuthError("Invalid mail server credentials")
+		}
 		return nil, models.NewServiceUnavailableError("IMAP server", err.Error())
 	}
 	defer client.Close()

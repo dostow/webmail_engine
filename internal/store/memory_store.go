@@ -308,5 +308,82 @@ func copyAccount(acc *models.Account) *models.Account {
 	return &copy
 }
 
+// MemoryMessageStore stores sent message records
+type MemoryMessageStore struct {
+	mu        sync.RWMutex
+	messages  map[string]*models.Message
+	sentIndex map[string][]string // accountID -> message IDs
+}
+
+// NewMemoryMessageStore creates a new message store
+func NewMemoryMessageStore() *MemoryMessageStore {
+	return &MemoryMessageStore{
+		messages:  make(map[string]*models.Message),
+		sentIndex: make(map[string][]string),
+	}
+}
+
+// StoreSentMessage stores a sent message record
+func (s *MemoryMessageStore) StoreSentMessage(msg *models.Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.messages[msg.MessageID] = msg
+
+	// Index by account
+	accountID := msg.From.Address
+	s.sentIndex[accountID] = append(s.sentIndex[accountID], msg.MessageID)
+
+	return nil
+}
+
+// GetMessageByID retrieves a message by its ID
+func (s *MemoryMessageStore) GetMessageByID(messageID string) (*models.Message, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	msg, exists := s.messages[messageID]
+	if !exists {
+		return nil, ErrNotFound
+	}
+
+	return msg, nil
+}
+
+// GetSentMessages retrieves sent messages for an account
+func (s *MemoryMessageStore) GetSentMessages(accountID string, limit, offset int) ([]*models.Message, int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	messageIDs := s.sentIndex[accountID]
+	total := len(messageIDs)
+
+	if total == 0 {
+		return []*models.Message{}, 0, nil
+	}
+
+	// Handle pagination
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= total {
+		return []*models.Message{}, total, nil
+	}
+
+	end := offset + limit
+	if limit <= 0 || end > total {
+		end = total
+	}
+
+	messages := make([]*models.Message, 0, end-offset)
+	for i := offset; i < end; i++ {
+		if msg, exists := s.messages[messageIDs[i]]; exists {
+			messages = append(messages, msg)
+		}
+	}
+
+	return messages, total, nil
+}
+
 // Ensure MemoryStore implements AccountStore interface
 var _ AccountStore = (*MemoryStore)(nil)

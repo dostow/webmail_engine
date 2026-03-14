@@ -8,17 +8,18 @@ import (
 	"sync"
 	"time"
 
+	"webmail_engine/internal/models"
+
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
-	"webmail_engine/internal/models"
 )
 
 // IMAPAdapter wraps go-imap/v2 to match our interface
 type IMAPAdapter struct {
-	client       *imapclient.Client
-	conn         net.Conn
-	mu           sync.Mutex
-	selectedBox  *imap.SelectData
+	client      *imapclient.Client
+	conn        net.Conn
+	mu          sync.Mutex
+	selectedBox *imap.SelectData
 }
 
 // ConnectIMAPv2 establishes connection using go-imap/v2
@@ -71,9 +72,40 @@ func ConnectIMAPv2(ctx context.Context, config IMAPConfig) (*IMAPAdapter, error)
 // authenticate performs IMAP LOGIN
 func (a *IMAPAdapter) authenticate(username, password string) error {
 	if err := a.client.Login(username, password).Wait(); err != nil {
+		// Check for authentication-specific errors
+		if isAuthenticationError(err) {
+			return fmt.Errorf("authentication failed: %w", models.ErrMailServerAuthFailed)
+		}
 		return fmt.Errorf("authentication failed: %w", err)
 	}
 	return nil
+}
+
+// isAuthenticationError checks if an error is an authentication failure
+func isAuthenticationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	// Common IMAP authentication failure indicators
+	authIndicators := []string{
+		"authentication failed",
+		"LOGIN failed",
+		"AUTHENTICATE failed",
+		"invalid credentials",
+		"bad credentials",
+		"username or password",
+		"NO [AUTHENTICATIONFAILED]",
+		"NO [UNAVAILABLE]", // Temporary auth failure (e.g., server-side issue)
+		"NO [AUTHORIZATIONFAILED]",
+		"rejected",
+	}
+	for _, indicator := range authIndicators {
+		if strings.Contains(strings.ToUpper(errStr), strings.ToUpper(indicator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // Close closes the IMAP connection
@@ -189,10 +221,10 @@ func (a *IMAPAdapter) FetchMessages(uids []uint32, includeBody bool) ([]MessageE
 
 	for _, msg := range messages {
 		envelope := MessageEnvelope{
-			UID:    uint32(msg.UID),
-			Flags:  make([]string, len(msg.Flags)),
-			Size:   msg.RFC822Size,
-			Date:   msg.InternalDate,
+			UID:   uint32(msg.UID),
+			Flags: make([]string, len(msg.Flags)),
+			Size:  msg.RFC822Size,
+			Date:  msg.InternalDate,
 		}
 
 		for i, flag := range msg.Flags {
@@ -253,7 +285,7 @@ func (a *IMAPAdapter) FetchMessageRaw(uid uint32) ([]byte, error) {
 	}
 
 	msg := messages[0]
-	
+
 	// Find body section data using FindBodySection
 	bodySection := &imap.FetchItemBodySection{Specifier: imap.PartSpecifierNone}
 	bodyBytes := msg.FindBodySection(bodySection)

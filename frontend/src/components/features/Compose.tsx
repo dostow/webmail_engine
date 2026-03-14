@@ -5,7 +5,6 @@ import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/label';
 import type { EmailAddress } from '@/types';
 import * as api from '@/services/api';
-import './Compose.css';
 
 interface ComposeViewProps {
   accountId?: string;
@@ -101,20 +100,18 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
   };
 
   return (
-    <div className="compose-view">
+    <div className="max-w-[800px]">
       <Card>
-        <div className="card-header">
-          <div className="card-title-wrapper">
-            <h3 className="card-title">Compose Email</h3>
-          </div>
+        <div className="flex items-center justify-between border-b px-6 py-4">
+          <h3 className="text-lg font-semibold">Compose Email</h3>
         </div>
-        <div className="card-content">
-          <form onSubmit={handleSubmit} className="compose-form">
-            <div className="form-group">
+        <div className="p-6">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <div>
               <Label htmlFor="fromAccount">From</Label>
               <select
                 id="fromAccount"
-                className="input"
+                className="flex h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm"
                 value={selectedAccountId}
                 onChange={(e) => setSelectedAccountId(e.target.value)}
               >
@@ -126,7 +123,7 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
               </select>
             </div>
 
-            <div className="form-group">
+            <div>
               <Label htmlFor="to">To</Label>
               <Input
                 id="to"
@@ -138,8 +135,8 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
               />
             </div>
 
-            <div className="form-row">
-              <div className="form-group">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
                 <Label htmlFor="cc">Cc</Label>
                 <Input
                   id="cc"
@@ -149,7 +146,7 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
                   onChange={(e) => setForm({ ...form, cc: e.target.value })}
                 />
               </div>
-              <div className="form-group">
+              <div>
                 <Label htmlFor="bcc">Bcc</Label>
                 <Input
                   id="bcc"
@@ -161,7 +158,7 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
               </div>
             </div>
 
-            <div className="form-group">
+            <div>
               <Label htmlFor="subject">Subject</Label>
               <Input
                 id="subject"
@@ -173,20 +170,26 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
               />
             </div>
 
-            <div className="form-group">
-              <div className="compose-toolbar">
+            <div>
+              <div className="flex items-center justify-between mb-2">
                 <Label>Body</Label>
-                <div className="compose-mode-toggle">
+                <div className="flex gap-2">
                   <button
                     type="button"
-                    className={`mode-btn ${!useHtml ? 'active' : ''}`}
+                    className={`px-3 py-1.5 text-xs rounded-md border transition-all ${!useHtml
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-muted text-muted-foreground border-border hover:bg-muted/80'
+                      }`}
                     onClick={() => setUseHtml(false)}
                   >
                     Plain Text
                   </button>
                   <button
                     type="button"
-                    className={`mode-btn ${useHtml ? 'active' : ''}`}
+                    className={`px-3 py-1.5 text-xs rounded-md border transition-all ${useHtml
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-muted text-muted-foreground border-border hover:bg-muted/80'
+                      }`}
                     onClick={() => setUseHtml(true)}
                   >
                     HTML
@@ -195,7 +198,7 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
               </div>
               {useHtml ? (
                 <textarea
-                  className="textarea html-editor"
+                  className="w-full min-h-[200px] rounded-lg border border-input bg-transparent px-3 py-2 text-sm font-mono outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                   placeholder="Enter HTML content..."
                   value={form.htmlBody}
                   onChange={(e) => setForm({ ...form, htmlBody: e.target.value })}
@@ -203,7 +206,7 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
                 />
               ) : (
                 <textarea
-                  className="textarea"
+                  className="w-full min-h-[200px] rounded-lg border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                   placeholder="Enter your message..."
                   value={form.textBody}
                   onChange={(e) => setForm({ ...form, textBody: e.target.value })}
@@ -212,12 +215,20 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
               )}
             </div>
 
-            {error && <div className="form-error">{error}</div>}
-            {success && <div className="form-success">{success}</div>}
+            {error && (
+              <div className="rounded-lg border border-destructive bg-destructive/10 px-4 py-3 text-destructive">
+                {error}
+              </div>
+            )}
+            {success && (
+              <div className="rounded-lg border border-green-600 bg-green-600/10 px-4 py-3 text-green-600">
+                {success}
+              </div>
+            )}
 
-            <div className="compose-actions">
+            <div className="flex gap-4 mt-4">
               <Button type="submit" variant="default" disabled={sending}>
-                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="mr-2 size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                 </svg>
                 {sending ? 'Sending...' : 'Send Email'}

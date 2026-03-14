@@ -6,7 +6,6 @@ import { Label } from '@/components/ui/label';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import type { Account } from '@/types';
 import * as api from '@/services/api';
-import './Accounts.css';
 
 interface AccountForm {
   email: string;
@@ -110,18 +109,16 @@ export function AccountsView({ onAccountAdded }: AccountsViewProps) {
   };
 
   return (
-    <div className="accounts-view">
+    <div className="flex flex-col gap-6">
       <Card>
-        <div className="card-header">
-          <div className="card-title-wrapper">
-            <h3 className="card-title">Add Email Account</h3>
-          </div>
+        <div className="flex items-center justify-between border-b px-6 py-4">
+          <h3 className="text-lg font-semibold">Add Email Account</h3>
         </div>
-        <div className="card-content">
-          <form onSubmit={handleSubmit} className="account-form">
-            <div className="form-section">
-              <div className="form-row">
-                <div className="form-group">
+        <div className="p-6">
+          <form onSubmit={handleSubmit} className="max-w-[800px]">
+            <div className="mb-6 pb-6 border-b">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
                   <Label htmlFor="email">Email Address</Label>
                   <Input
                     id="email"
@@ -133,7 +130,7 @@ export function AccountsView({ onAccountAdded }: AccountsViewProps) {
                     onChange={(e) => setForm({ ...form, email: e.target.value })}
                   />
                 </div>
-                <div className="form-group">
+                <div>
                   <Label htmlFor="password">Password</Label>
                   <Input
                     id="password"
@@ -148,10 +145,10 @@ export function AccountsView({ onAccountAdded }: AccountsViewProps) {
               </div>
             </div>
 
-            <div className="form-section">
-              <h3 className="form-section-title">IMAP Settings</h3>
-              <div className="form-row">
-                <div className="form-group">
+            <div className="mb-6 pb-6 border-b">
+              <h3 className="mb-4 text-sm font-semibold text-muted-foreground">IMAP Settings</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
                   <Label htmlFor="imap_host">IMAP Host</Label>
                   <Input
                     id="imap_host"
@@ -162,7 +159,7 @@ export function AccountsView({ onAccountAdded }: AccountsViewProps) {
                     onChange={(e) => setForm({ ...form, imap_host: e.target.value })}
                   />
                 </div>
-                <div className="form-group">
+                <div>
                   <Label htmlFor="imap_port">IMAP Port</Label>
                   <Input
                     id="imap_port"
@@ -173,12 +170,12 @@ export function AccountsView({ onAccountAdded }: AccountsViewProps) {
                   />
                 </div>
               </div>
-              <div className="form-row">
-                <div className="form-group">
+              <div className="grid grid-cols-2 gap-4 mt-4">
+                <div>
                   <Label htmlFor="imap_encryption">Encryption</Label>
                   <select
                     id="imap_encryption"
-                    className="input"
+                    className="flex h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm"
                     value={form.imap_encryption}
                     onChange={(e) => setForm({ ...form, imap_encryption: e.target.value })}
                   >
@@ -191,10 +188,10 @@ export function AccountsView({ onAccountAdded }: AccountsViewProps) {
               </div>
             </div>
 
-            <div className="form-section">
-              <h3 className="form-section-title">SMTP Settings</h3>
-              <div className="form-row">
-                <div className="form-group">
+            <div className="mb-6">
+              <h3 className="mb-4 text-sm font-semibold text-muted-foreground">SMTP Settings</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
                   <Label htmlFor="smtp_host">SMTP Host</Label>
                   <Input
                     id="smtp_host"
@@ -205,7 +202,7 @@ export function AccountsView({ onAccountAdded }: AccountsViewProps) {
                     onChange={(e) => setForm({ ...form, smtp_host: e.target.value })}
                   />
                 </div>
-                <div className="form-group">
+                <div>
                   <Label htmlFor="smtp_port">SMTP Port</Label>
                   <Input
                     id="smtp_port"
@@ -216,12 +213,12 @@ export function AccountsView({ onAccountAdded }: AccountsViewProps) {
                   />
                 </div>
               </div>
-              <div className="form-row">
-                <div className="form-group">
+              <div className="grid grid-cols-2 gap-4 mt-4">
+                <div>
                   <Label htmlFor="smtp_encryption">Encryption</Label>
                   <select
                     id="smtp_encryption"
-                    className="input"
+                    className="flex h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm"
                     value={form.smtp_encryption}
                     onChange={(e) => setForm({ ...form, smtp_encryption: e.target.value })}
                   >
@@ -234,7 +231,11 @@ export function AccountsView({ onAccountAdded }: AccountsViewProps) {
               </div>
             </div>
 
-            {error && <div className="form-error">{error}</div>}
+            {error && (
+              <div className="mb-4 rounded-lg border border-destructive bg-destructive/10 px-4 py-3 text-destructive">
+                {error}
+              </div>
+            )}
 
             <Button type="submit" variant="default" disabled={submitting}>
               {submitting ? 'Adding...' : 'Add Account'}
@@ -244,34 +245,35 @@ export function AccountsView({ onAccountAdded }: AccountsViewProps) {
       </Card>
 
       <Card>
-        <div className="card-header">
-          <div className="card-title-wrapper">
-            <h3 className="card-title">Your Accounts</h3>
-          </div>
+        <div className="flex items-center justify-between border-b px-6 py-4">
+          <h3 className="text-lg font-semibold">Your Accounts</h3>
           <Button variant="outline" size="sm" onClick={loadAccounts}>
             Refresh
           </Button>
         </div>
-        <div className="card-content">
+        <div className="p-6">
           {loading ? (
-            <div className="empty-state">Loading accounts...</div>
+            <div className="py-12 text-center text-muted-foreground">Loading accounts...</div>
           ) : accounts.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-state-icon">📭</div>
+            <div className="py-12 text-center text-muted-foreground">
+              <div className="mb-4 text-5xl opacity-30">📭</div>
               <p>No accounts yet. Add your first email account above.</p>
             </div>
           ) : (
-            <div className="account-list">
+            <div className="flex flex-col gap-3">
               {accounts.map((account) => (
-                <div key={account.id} className="account-item">
-                  <div className="account-info">
-                    <div className="account-email">{account.email}</div>
-                    <div className="account-meta">
+                <div
+                  key={account.id}
+                  className="flex items-center justify-between rounded-lg border bg-muted/50 px-4 py-4"
+                >
+                  <div className="flex-1">
+                    <div className="font-semibold">{account.email}</div>
+                    <div className="text-sm text-muted-foreground">
                       IMAP: {account.imap_config.host}:{account.imap_config.port}
                     </div>
                   </div>
-                  <div className="account-status">{getStatusBadge(account.status)}</div>
-                  <div className="account-actions">
+                  <div className="mx-4">{getStatusBadge(account.status)}</div>
+                  <div className="flex gap-2">
                     <Button
                       variant="outline"
                       size="sm"

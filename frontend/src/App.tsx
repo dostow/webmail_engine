@@ -4,7 +4,6 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/sonner';
 import { Sidebar, Header } from '@/components/layout';
 import { AccountsView, MessagesView, ComposeView, HealthView, SettingsView, MessageDetail } from '@/components/features';
-import './App.css';
 
 const navSections = [
   {
@@ -139,13 +138,13 @@ function AppContent() {
   };
 
   return (
-    <div className="app">
+    <div className="flex min-h-screen">
       <Sidebar
         sections={navSections}
         activeView={activeNav}
         onViewChange={handleNavChange}
       />
-      <main className="main-content">
+      <main className="flex-1 ml-[250px] p-8">
         <Header
           title={getPageTitle()}
           apiUrl={apiUrl}

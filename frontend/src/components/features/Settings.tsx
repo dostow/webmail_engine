@@ -3,7 +3,6 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/label';
-import './Settings.css';
 
 export function SettingsView() {
   const [apiUrl, setApiUrl] = useState(
@@ -18,16 +17,14 @@ export function SettingsView() {
   };
 
   return (
-    <div className="settings-view">
+    <div className="flex flex-col gap-6 max-w-[600px]">
       <Card>
-        <div className="card-header">
-          <div className="card-title-wrapper">
-            <h3 className="card-title">API Configuration</h3>
-          </div>
+        <div className="flex items-center justify-between border-b px-6 py-4">
+          <h3 className="text-lg font-semibold">API Configuration</h3>
         </div>
-        <div className="card-content">
-          <div className="settings-form">
-            <div className="form-group">
+        <div className="p-6">
+          <div className="flex flex-col gap-4">
+            <div>
               <Label htmlFor="apiUrl">API Base URL</Label>
               <Input
                 id="apiUrl"
@@ -44,23 +41,21 @@ export function SettingsView() {
               Save Configuration
             </Button>
             {saved && (
-              <div className="text-sm text-success mt-2">Configuration saved!</div>
+              <div className="text-sm text-green-600 mt-2">Configuration saved!</div>
             )}
           </div>
         </div>
       </Card>
 
       <Card>
-        <div className="card-header">
-          <div className="card-title-wrapper">
-            <h3 className="card-title">About</h3>
-          </div>
+        <div className="flex items-center justify-between border-b px-6 py-4">
+          <h3 className="text-lg font-semibold">About</h3>
         </div>
-        <div className="card-content">
-          <div className="about-section">
-            <h4>Webmail Engine Frontend</h4>
-            <p className="about-version">Version 1.0.0</p>
-            <p className="about-description">
+        <div className="p-6">
+          <div className="text-center">
+            <h4 className="text-xl font-semibold mb-2">Webmail Engine Frontend</h4>
+            <p className="text-sm text-muted-foreground mb-4">Version 1.0.0</p>
+            <p className="text-sm text-muted-foreground leading-relaxed">
               A modern React-based frontend for the Webmail Engine API.
               Built with Vite, TypeScript, and React.
             </p>

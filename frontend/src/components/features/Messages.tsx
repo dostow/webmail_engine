@@ -22,7 +22,6 @@ import {
 import * as api from '@/services/api';
 import { formatMessageDate } from '@/utils/format';
 import type { Account, Message } from '@/types';
-import './Messages.css';
 
 interface MessagesViewProps {
   accountId?: string;

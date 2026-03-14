@@ -1,0 +1,1396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webmail Engine - API Test Interface</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #3b82f6;
+            --primary-dark: #60a5fa;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-tertiary: #334155;
+            --text-primary: #f1f5f9;
+            --text-secondary: #cbd5e1;
+            --text-muted: #94a3b8;
+            --border-color: #334155;
+            --card-bg: #1e293b;
+            --sidebar-bg: #0f172a;
+            --input-bg: #1e293b;
+            --hover-bg: #334155;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.5;
+        }
+
+        /* Layout */
+        .app {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 250px;
+            background: var(--sidebar-bg);
+            border-right: 1px solid var(--border-color);
+            padding: 1.5rem;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+        }
+
+        .logo {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 2rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .nav-section {
+            margin-bottom: 1.5rem;
+        }
+
+        .nav-section-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+            letter-spacing: 0.05em;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.625rem 0.75rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            transition: all 0.15s;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+
+        .nav-item:hover {
+            background: var(--hover-bg);
+        }
+
+        .nav-item.active {
+            background: var(--primary);
+            color: white;
+        }
+
+        .nav-icon {
+            width: 1.25rem;
+            height: 1.25rem;
+        }
+
+        /* Main Content */
+        .main {
+            flex: 1;
+            margin-left: 250px;
+            padding: 2rem;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+
+        .page-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+
+        .api-url-input {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: var(--input-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+        }
+
+        .api-url-input input {
+            border: none;
+            outline: none;
+            width: 200px;
+            font-size: 0.875rem;
+            background: transparent;
+            color: var(--text-primary);
+        }
+
+        /* Cards */
+        .card {
+            background: var(--card-bg);
+            border-radius: 0.75rem;
+            border: 1px solid var(--border-color);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        .card-title {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        /* Forms */
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin-bottom: 0.375rem;
+            color: var(--text-secondary);
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 0.625rem 0.875rem;
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            transition: border-color 0.15s;
+            background: var(--input-bg);
+            color: var(--text-primary);
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+        }
+
+        .form-section {
+            margin-bottom: 1.5rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .form-section:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.625rem 1.25rem;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+            border: none;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            background: var(--hover-bg);
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #b91c1c;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-sm {
+            padding: 0.375rem 0.75rem;
+            font-size: 0.8125rem;
+        }
+
+        /* Status Badges */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .status-badge.success {
+            background: rgba(34, 197, 94, 0.2);
+            color: #4ade80;
+        }
+
+        .status-badge.error {
+            background: rgba(239, 68, 68, 0.2);
+            color: #f87171;
+        }
+
+        .status-badge.warning {
+            background: rgba(245, 158, 11, 0.2);
+            color: #fbbf24;
+        }
+
+        .status-dot {
+            width: 0.5rem;
+            height: 0.5rem;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        /* Account List */
+        .account-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            margin-bottom: 0.75rem;
+            background: var(--bg-tertiary);
+        }
+
+        .account-info {
+            flex: 1;
+        }
+
+        .account-email {
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+            color: var(--text-primary);
+        }
+
+        .account-meta {
+            font-size: 0.8125rem;
+            color: var(--text-muted);
+        }
+
+        .account-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        /* Messages */
+        .message-list {
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            overflow: hidden;
+        }
+
+        .message-item {
+            display: flex;
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .message-item:hover {
+            background: var(--hover-bg);
+        }
+
+        .message-item:last-child {
+            border-bottom: none;
+        }
+
+        .message-sender {
+            width: 200px;
+            font-weight: 500;
+            flex-shrink: 0;
+            color: var(--text-secondary);
+        }
+
+        .message-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .message-subject {
+            font-weight: 500;
+            margin-bottom: 0.25rem;
+            color: var(--text-primary);
+        }
+
+        .message-preview {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .message-date {
+            font-size: 0.8125rem;
+            color: var(--text-muted);
+            flex-shrink: 0;
+            margin-left: 1rem;
+        }
+
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            bottom: 1.5rem;
+            right: 1.5rem;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .toast {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 1rem 1.25rem;
+            background: var(--card-bg);
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+            border-left: 4px solid;
+            animation: slideIn 0.3s ease;
+            min-width: 300px;
+            color: var(--text-primary);
+        }
+
+        .toast.success {
+            border-left-color: var(--success);
+        }
+
+        .toast.error {
+            border-left-color: var(--danger);
+        }
+
+        .toast.warning {
+            border-left-color: var(--warning);
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        /* Loading Spinner */
+        .spinner {
+            width: 1.25rem;
+            height: 1.25rem;
+            border: 2px solid var(--border-color);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* View Toggle */
+        .view {
+            display: none;
+        }
+
+        .view.active {
+            display: block;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-muted);
+        }
+
+        .empty-state-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.3;
+        }
+
+        /* Response Viewer */
+        .response-viewer {
+            background: #0d1117;
+            color: #10b981;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.8125rem;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        /* Health Grid */
+        .health-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        .health-card {
+            background: var(--bg-tertiary);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            text-align: center;
+        }
+
+        .health-value {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+            color: var(--text-primary);
+        }
+
+        .health-label {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 1.5rem;
+        }
+
+        .tab {
+            padding: 0.75rem 1.5rem;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -1px;
+            font-weight: 500;
+            color: var(--text-muted);
+        }
+
+        .tab:hover {
+            color: var(--text-primary);
+        }
+
+        .tab.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                </svg>
+                Webmail Engine
+            </div>
+
+            <nav>
+                <div class="nav-section">
+                    <div class="nav-section-title">Main</div>
+                    <div class="nav-item active" data-view="accounts">
+                        <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
+                        </svg>
+                        Accounts
+                    </div>
+                    <div class="nav-item" data-view="messages">
+                        <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/>
+                        </svg>
+                        Messages
+                    </div>
+                    <div class="nav-item" data-view="compose">
+                        <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                        </svg>
+                        Compose
+                    </div>
+                </div>
+
+                <div class="nav-section">
+                    <div class="nav-section-title">System</div>
+                    <div class="nav-item" data-view="health">
+                        <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        Health
+                    </div>
+                    <div class="nav-item" data-view="settings">
+                        <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                        </svg>
+                        Settings
+                    </div>
+                </div>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main">
+            <header class="header">
+                <h1 class="page-title" id="pageTitle">Accounts</h1>
+                <div class="api-url-input">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/>
+                    </svg>
+                    <input type="text" id="apiUrl" value="http://localhost:8080" placeholder="API URL">
+                </div>
+            </header>
+
+            <!-- Accounts View -->
+            <div class="view active" id="accountsView">
+                <div class="card">
+                    <h2 class="card-title">
+                        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                        </svg>
+                        Add Email Account
+                    </h2>
+                    <form id="addAccountForm">
+                        <div class="form-section">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label">Email Address *</label>
+                                    <input type="email" class="form-input" name="email" required placeholder="you@example.com">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Password *</label>
+                                    <input type="password" class="form-input" name="password" required placeholder="••••••••">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <h3 style="font-size: 0.875rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-muted);">IMAP Settings</h3>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label">IMAP Host</label>
+                                    <input type="text" class="form-input" name="imap_host" placeholder="imap.example.com">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">IMAP Port</label>
+                                    <input type="number" class="form-input" name="imap_port" value="993">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label">Encryption</label>
+                                    <select class="form-input" name="imap_encryption">
+                                        <option value="ssl">SSL/TLS</option>
+                                        <option value="starttls">STARTTLS</option>
+                                        <option value="tls">TLS</option>
+                                        <option value="none">None</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <h3 style="font-size: 0.875rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-muted);">SMTP Settings</h3>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label">SMTP Host</label>
+                                    <input type="text" class="form-input" name="smtp_host" placeholder="smtp.example.com">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">SMTP Port</label>
+                                    <input type="number" class="form-input" name="smtp_port" value="587">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label">Encryption</label>
+                                    <select class="form-input" name="smtp_encryption">
+                                        <option value="starttls">STARTTLS</option>
+                                        <option value="ssl">SSL/TLS</option>
+                                        <option value="tls">TLS</option>
+                                        <option value="none">None</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary" id="addAccountBtn">
+                            Add Account
+                        </button>
+                    </form>
+                </div>
+
+                <div class="card">
+                    <h2 class="card-title">
+                        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                        </svg>
+                        Your Accounts
+                        <button class="btn btn-secondary btn-sm" onclick="loadAccounts()" style="margin-left: auto;">
+                            Refresh
+                        </button>
+                    </h2>
+                    <div id="accountsList">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📭</div>
+                            <p>No accounts yet. Add your first email account above.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Messages View -->
+            <div class="view" id="messagesView">
+                <div class="card">
+                    <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem;">
+                        <select class="form-input" id="accountSelect" style="width: 300px;" onchange="loadMessagesForAccount()">
+                            <option value="">Select an account...</option>
+                        </select>
+                        <button class="btn btn-secondary" onclick="loadMessagesForAccount()" title="Refresh messages">
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                            Refresh
+                        </button>
+                    </div>
+                    <p style="font-size: 0.875rem; color: var(--text-muted);">
+                        ℹ️ Search functionality will be added in a future update.
+                    </p>
+                </div>
+
+                <div class="card">
+                    <h2 class="card-title">Messages</h2>
+                    <div id="messagesList">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📬</div>
+                            <p>Select an account to view messages.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Message Detail View -->
+            <div class="view" id="messageDetailView">
+                <div class="card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <button class="btn btn-secondary" onclick="backToMessages()">
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="margin-right: 0.5rem;">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                            </svg>
+                            Back to Messages
+                        </button>
+                        <button class="btn btn-secondary" onclick="refreshMessage()" title="Refresh">
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div id="messageDetailContent">
+                        <div style="text-align: center; padding: 2rem;">
+                            <span class="spinner"></span>
+                            <p style="margin-top: 1rem; color: var(--text-muted);">Loading message...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Compose View -->
+            <div class="view" id="composeView">
+                <div class="card">
+                    <h2 class="card-title">Compose Email</h2>
+                    <form id="composeForm">
+                        <div class="form-group">
+                            <label class="form-label">From Account</label>
+                            <select class="form-input" name="account_id" id="composeAccountSelect" required>
+                                <option value="">Select an account...</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">To</label>
+                            <input type="text" class="form-input" name="to" required placeholder="recipient@example.com, another@example.com">
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label class="form-label">Cc (Optional)</label>
+                                <input type="text" class="form-input" name="cc" placeholder="cc@example.com">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Bcc (Optional)</label>
+                                <input type="text" class="form-input" name="bcc" placeholder="bcc@example.com">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Subject</label>
+                            <input type="text" class="form-input" name="subject" required placeholder="Email subject">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Message</label>
+                            <textarea class="form-input" name="body" rows="10" required placeholder="Write your message..."></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            Send Email
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Health View -->
+            <div class="view" id="healthView">
+                <div class="card">
+                    <h2 class="card-title">System Health</h2>
+                    <div class="health-grid" id="healthGrid">
+                        <div class="health-card">
+                            <div class="health-value" id="healthStatus">--</div>
+                            <div class="health-label">Overall Status</div>
+                        </div>
+                        <div class="health-card">
+                            <div class="health-value" id="healthScore">--</div>
+                            <div class="health-label">Health Score</div>
+                        </div>
+                        <div class="health-card">
+                            <div class="health-value" id="accountsCount">--</div>
+                            <div class="health-label">Connected Accounts</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2 class="card-title">Component Status</h2>
+                    <div id="componentStatus">
+                        <p style="color: var(--text-muted);">Loading...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings View -->
+            <div class="view" id="settingsView">
+                <div class="card">
+                    <h2 class="card-title">API Configuration</h2>
+                    <div class="form-group">
+                        <label class="form-label">Base URL</label>
+                        <input type="text" class="form-input" id="settingsApiUrl" value="http://localhost:8080">
+                    </div>
+                    <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script>
+        // State
+        let accounts = [];
+        let currentView = 'accounts';
+
+        // API Helper
+        async function api(endpoint, options = {}) {
+            const baseUrl = document.getElementById('apiUrl').value.replace(/\/$/, '');
+            const url = `${baseUrl}${endpoint}`;
+            
+            const config = {
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                ...options
+            };
+
+            try {
+                const response = await fetch(url, config);
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error?.message || `HTTP ${response.status}`);
+                }
+                
+                return { data, status: response.status };
+            } catch (error) {
+                console.error('API Error:', error);
+                throw error;
+            }
+        }
+
+        // Toast Notifications
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.innerHTML = `
+                <span>${message}</span>
+            `;
+            container.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.style.animation = 'slideIn 0.3s ease reverse';
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+
+        // Navigation
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const view = item.dataset.view;
+                switchView(view);
+            });
+        });
+
+        function switchView(view) {
+            currentView = view;
+            
+            // Update nav
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.classList.toggle('active', item.dataset.view === view);
+            });
+            
+            // Update views
+            document.querySelectorAll('.view').forEach(el => {
+                el.classList.toggle('active', el.id === `${view}View`);
+            });
+            
+            // Update title
+            const titles = {
+                accounts: 'Accounts',
+                messages: 'Messages',
+                compose: 'Compose Email',
+                health: 'System Health',
+                settings: 'Settings'
+            };
+            document.getElementById('pageTitle').textContent = titles[view];
+            
+            // Load data for view
+            if (view === 'accounts') loadAccounts();
+            if (view === 'messages') {
+                loadAccountSelects();
+                // Auto-load messages if account already selected
+                const accountId = document.getElementById('accountSelect')?.value;
+                if (accountId) {
+                    loadMessagesForAccount();
+                }
+            }
+            if (view === 'compose') loadAccountSelects();
+            if (view === 'health') loadHealth();
+        }
+
+        // Account Functions
+        document.getElementById('addAccountForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('addAccountBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Connecting...';
+            
+            const formData = new FormData(e.target);
+            const data = Object.fromEntries(formData.entries());
+            
+            // Convert port numbers
+            data.imap_port = parseInt(data.imap_port);
+            data.smtp_port = parseInt(data.smtp_port);
+            
+            try {
+                const result = await api('/v1/accounts', {
+                    method: 'POST',
+                    body: JSON.stringify(data)
+                });
+                
+                showToast(`Account ${result.data.status === 'reconfigured' ? 'updated' : 'created'} successfully!`);
+                e.target.reset();
+                loadAccounts();
+            } catch (error) {
+                showToast(error.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Add Account';
+            }
+        });
+
+        async function loadAccounts() {
+            const list = document.getElementById('accountsList');
+            list.innerHTML = '<div style="text-align: center; padding: 2rem;"><span class="spinner"></span></div>';
+
+            try {
+                const { data } = await api('/v1/accounts');
+                accounts = data.accounts || [];
+
+                if (accounts.length === 0) {
+                    list.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📭</div>
+                            <p>No accounts yet. Add your first email account above.</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                list.innerHTML = accounts.map(acc => {
+                    const isConnected = acc.status === 'active';
+                    const statusClass = isConnected ? 'success' : 'warning';
+                    const statusText = isConnected ? 'Connected' : acc.status;
+                    
+                    return `
+                        <div class="account-item">
+                            <div class="account-info">
+                                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                                    <span class="status-dot" style="width: 8px; height: 8px; border-radius: 50%; background: ${isConnected ? 'var(--success)' : 'var(--warning)'};"></span>
+                                    <div class="account-email">${acc.email}</div>
+                                </div>
+                                <div class="account-meta">
+                                    IMAP: ${acc.imap_config?.host || 'N/A'}:${acc.imap_config?.port || ''} •
+                                    Status: ${statusText}
+                                </div>
+                            </div>
+                            <div class="account-actions">
+                                <span class="status-badge ${statusClass}">
+                                    <span class="status-dot"></span>
+                                    ${acc.status}
+                                </span>
+                                <button class="btn btn-danger btn-sm" onclick="deleteAccount('${acc.id}')">Delete</button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (error) {
+                list.innerHTML = `
+                    <div class="empty-state">
+                        <p style="color: var(--danger);">Failed to load accounts: ${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function deleteAccount(id) {
+            if (!confirm('Are you sure you want to delete this account?')) return;
+            
+            try {
+                await api(`/v1/accounts/${id}`, { method: 'DELETE' });
+                showToast('Account deleted successfully');
+                loadAccounts();
+            } catch (error) {
+                showToast(error.message, 'error');
+            }
+        }
+
+        // Account Select Helpers
+        async function loadAccountSelects() {
+            try {
+                const { data } = await api('/v1/accounts');
+                accounts = data.accounts || [];
+                
+                const selects = ['accountSelect', 'composeAccountSelect'];
+                selects.forEach(id => {
+                    const select = document.getElementById(id);
+                    if (select) {
+                        select.innerHTML = '<option value="">Select an account...</option>' +
+                            accounts.map(acc => `<option value="${acc.id}">${acc.email}</option>`).join('');
+                    }
+                });
+            } catch (error) {
+                console.error('Failed to load accounts:', error);
+            }
+        }
+
+        // Message Functions
+        async function loadMessagesForAccount() {
+            const accountId = document.getElementById('accountSelect').value;
+
+            if (!accountId) {
+                document.getElementById('messagesList').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📬</div>
+                        <p>Select an account to view messages.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const list = document.getElementById('messagesList');
+            list.innerHTML = `
+                <div style="text-align: center; padding: 3rem;">
+                    <div class="spinner" style="width: 2rem; height: 2rem;"></div>
+                    <p style="margin-top: 1rem; color: var(--text-muted); font-weight: 500;">Connecting to IMAP server...</p>
+                    <p style="margin-top: 0.5rem; font-size: 0.875rem; color: var(--text-muted);">This may take a few seconds</p>
+                </div>
+            `;
+
+            const startTime = Date.now();
+
+            try {
+                console.log('Fetching messages for account:', accountId);
+                const endpoint = `/v1/accounts/${accountId}/messages?limit=50`;
+
+                console.log('API endpoint:', endpoint);
+                const { data } = await api(endpoint);
+                console.log('API response:', data);
+                
+                const messages = data.messages || [];
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+                if (messages.length === 0) {
+                    list.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📭</div>
+                            <p>No messages found in folder.</p>
+                            <p style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0.5rem;">Total messages: ${data.total_count || 0}</p>
+                            <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">Loaded in ${elapsed}s</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                console.log(`Displaying ${messages.length} messages (loaded in ${elapsed}s)`);
+                list.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding: 0.75rem; background: var(--bg-tertiary); border-radius: 0.5rem;">
+                        <div style="font-size: 0.875rem; color: var(--text-muted);">
+                            Showing ${messages.length} of ${data.total_count || messages.length} messages
+                        </div>
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">
+                            Loaded in ${elapsed}s
+                        </div>
+                    </div>
+                    <div class="message-list">
+                        ${messages.map(msg => `
+                            <div class="message-item" onclick="openMessage('${msg.uid}')" style="cursor: pointer;">
+                                <div class="message-sender">${msg.from?.name || msg.from?.address || 'Unknown'}</div>
+                                <div class="message-content">
+                                    <div class="message-subject">${msg.subject || '(No subject)'}</div>
+                                </div>
+                                <div class="message-date">${msg.date ? new Date(msg.date).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : ''}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Failed to load messages:', error);
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                list.innerHTML = `
+                    <div class="empty-state">
+                        <p style="color: var(--danger);">Failed to load messages</p>
+                        <p style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0.5rem;">${error.message}</p>
+                        <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 1rem;">
+                            Time elapsed: ${elapsed}s<br>
+                            Check server logs for IMAP connection details
+                        </p>
+                    </div>
+                `;
+                showToast(`Failed to load messages: ${error.message}`, 'error');
+            }
+        }
+
+        // Compose Functions
+        document.getElementById('composeForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = e.target.querySelector('button[type="submit"]');
+            btn.disabled = true;
+            btn.textContent = 'Sending...';
+            
+            const formData = new FormData(e.target);
+            const data = {
+                to: parseContacts(formData.get('to')),
+                cc: parseContacts(formData.get('cc')),
+                bcc: parseContacts(formData.get('bcc')),
+                subject: formData.get('subject'),
+                text_body: formData.get('body')
+            };
+            
+            try {
+                await api(`/v1/accounts/${formData.get('account_id')}/send`, {
+                    method: 'POST',
+                    body: JSON.stringify(data)
+                });
+                
+                showToast('Email sent successfully!');
+                e.target.reset();
+            } catch (error) {
+                showToast(error.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Send Email';
+            }
+        });
+
+        function parseContacts(str) {
+            if (!str) return [];
+            return str.split(',').map(s => s.trim()).filter(s => s).map(s => ({ address: s }));
+        }
+
+        // Health Functions
+        async function loadHealth() {
+            try {
+                const { data } = await api('/v1/health');
+                
+                document.getElementById('healthStatus').textContent = data.status || 'Unknown';
+                document.getElementById('healthStatus').style.color = 
+                    data.status === 'healthy' ? 'var(--success)' : 
+                    data.status === 'degraded' ? 'var(--warning)' : 'var(--danger)';
+                
+                document.getElementById('healthScore').textContent = data.score || '--';
+                document.getElementById('accountsCount').textContent = 
+                    data.components?.accounts?.count || accounts.length;
+                
+                // Component status
+                const components = data.components || {};
+                document.getElementById('componentStatus').innerHTML = Object.entries(components).map(([name, comp]) => `
+                    <div class="account-item">
+                        <div class="account-info">
+                            <div class="account-email">${name}</div>
+                            <div class="account-meta">Status: ${comp.status}</div>
+                        </div>
+                        <span class="status-badge ${comp.status === 'healthy' ? 'success' : 'warning'}">
+                            <span class="status-dot"></span>
+                            ${comp.status}
+                        </span>
+                    </div>
+                `).join('');
+            } catch (error) {
+                document.getElementById('healthGrid').innerHTML = `
+                    <div class="empty-state">
+                        <p style="color: var(--danger);">Failed to load health: ${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        // Settings
+        function saveSettings() {
+            const url = document.getElementById('settingsApiUrl').value;
+            document.getElementById('apiUrl').value = url;
+            localStorage.setItem('webmail_api_url', url);
+            showToast('Settings saved!');
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            // Load saved API URL
+            const savedUrl = localStorage.getItem('webmail_api_url');
+            if (savedUrl) {
+                document.getElementById('apiUrl').value = savedUrl;
+                document.getElementById('settingsApiUrl').value = savedUrl;
+            }
+            
+            // Initial load
+            loadAccounts();
+        });
+
+        // Message Detail Functions
+        let currentMessageUID = null;
+        let currentAccountId = null;
+
+        function openMessage(uid) {
+            currentMessageUID = uid;
+            currentAccountId = document.getElementById('accountSelect').value;
+            
+            if (!currentAccountId) {
+                showToast('No account selected', 'warning');
+                return;
+            }
+            
+            // Switch to detail view
+            switchViewToMessageDetail();
+            loadMessageDetail(uid);
+        }
+
+        function switchViewToMessageDetail() {
+            // Hide all views
+            document.querySelectorAll('.view').forEach(el => {
+                el.classList.remove('active');
+            });
+            
+            // Show message detail view
+            document.getElementById('messageDetailView').classList.add('active');
+            
+            // Update nav
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.classList.remove('active');
+            });
+        }
+
+        function backToMessages() {
+            // Switch back to messages view
+            document.querySelectorAll('.view').forEach(el => {
+                el.classList.remove('active');
+            });
+            document.getElementById('messagesView').classList.add('active');
+            
+            // Update nav
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.classList.toggle('active', item.dataset.view === 'messages');
+            });
+        }
+
+        async function loadMessageDetail(uid) {
+            const content = document.getElementById('messageDetailContent');
+            content.innerHTML = `
+                <div style="text-align: center; padding: 2rem;">
+                    <span class="spinner"></span>
+                    <p style="margin-top: 1rem; color: var(--text-muted);">Loading message...</p>
+                </div>
+            `;
+
+            try {
+                const accountId = currentAccountId;
+                console.log('Fetching message detail for UID:', uid, 'Account:', accountId);
+                
+                const { data } = await api(`/v1/accounts/${accountId}/messages/${uid}`);
+                console.log('Message detail:', data);
+
+                // Format date
+                const dateStr = data.date ? new Date(data.date).toLocaleString() : 'Unknown';
+                
+                // Build headers HTML
+                let headersHTML = `
+                    <div style="margin-bottom: 1.5rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--border-color);">
+                        <h1 style="font-size: 1.5rem; margin-bottom: 1rem;">${data.subject || '(No subject)'}</h1>
+                        <div style="display: grid; grid-template-columns: auto 1fr; gap: 0.5rem 1rem; font-size: 0.875rem;">
+                            <div style="color: var(--text-muted);">From:</div>
+                            <div><strong>${data.from?.name || data.from?.address || 'Unknown'}</strong> &lt;${data.from?.address || ''}&gt;</div>
+                            
+                            <div style="color: var(--text-muted);">To:</div>
+                            <div>${(data.to || []).map(r => `${r.name || ''} &lt;${r.address}&gt;`).join(', ')}</div>
+                            
+                            ${data.cc && data.cc.length > 0 ? `
+                                <div style="color: var(--text-muted);">Cc:</div>
+                                <div>${data.cc.map(r => `${r.name || ''} &lt;${r.address}&gt;`).join(', ')}</div>
+                            ` : ''}
+
+                            ${data.bcc && data.bcc.length > 0 ? `
+                                <div style="color: var(--text-muted);">Bcc:</div>
+                                <div>${data.bcc.map(r => `${r.name || ''} &lt;${r.address}&gt;`).join(', ')}</div>
+                            ` : ''}
+
+                            <div style="color: var(--text-muted);">Date:</div>
+                            <div>${dateStr}</div>
+                        </div>
+                    </div>
+                `;
+
+                // Build body HTML
+                let bodyHTML = '';
+                if (data.body?.html) {
+                    bodyHTML = `
+                        <div style="background: var(--bg-tertiary); padding: 1.5rem; border-radius: 0.5rem; margin-top: 1rem;">
+                            <div style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 1rem;">HTML Content:</div>
+                            <div style="background: var(--input-bg); padding: 1rem; border-radius: 0.25rem; border: 1px solid var(--border-color);">
+                                ${data.body.html}
+                            </div>
+                        </div>
+                    `;
+                } else if (data.body?.text || data.body?.plain_text) {
+                    const text = data.body.text || data.body.plain_text;
+                    bodyHTML = `
+                        <div style="margin-top: 1rem;">
+                            <div style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 0.5rem;">Message Content:</div>
+                            <div style="white-space: pre-wrap; line-height: 1.6;">${text}</div>
+                        </div>
+                    `;
+                }
+
+                // Build attachments HTML
+                let attachmentsHTML = '';
+                if (data.attachments && data.attachments.length > 0) {
+                    attachmentsHTML = `
+                        <div style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
+                            <h3 style="font-size: 1rem; margin-bottom: 1rem;">Attachments (${data.attachments.length})</h3>
+                            <div style="display: flex; flex-wrap: wrap; gap: 0.75rem;">
+                                ${data.attachments.map(att => `
+                                    <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 0.5rem; font-size: 0.875rem;">
+                                        <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
+                                        </svg>
+                                        <span>${att.filename}</span>
+                                        <span style="color: var(--text-muted);">(${formatFileSize(att.size)})</span>
+                                        ${att.access_url ? `
+                                            <a href="${att.access_url}" target="_blank" style="color: var(--primary); text-decoration: none; margin-left: 0.5rem;">Download</a>
+                                        ` : ''}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                content.innerHTML = headersHTML + bodyHTML + attachmentsHTML;
+            } catch (error) {
+                console.error('Failed to load message detail:', error);
+                content.innerHTML = `
+                    <div class="empty-state">
+                        <p style="color: var(--danger);">Failed to load message</p>
+                        <p style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0.5rem;">${error.message}</p>
+                    </div>
+                `;
+                showToast(`Failed to load message: ${error.message}`, 'error');
+            }
+        }
+
+        function refreshMessage() {
+            if (currentMessageUID) {
+                loadMessageDetail(currentMessageUID);
+            }
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+    </script>
+</body>
+</html>

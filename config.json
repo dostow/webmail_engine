@@ -1,0 +1,88 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "read_timeout": 30000000000,
+    "write_timeout": 30000000000,
+    "idle_timeout": 120000000000,
+    "shutdown_timeout": 30000000000,
+    "tls_enabled": false,
+    "tls_cert_file": "",
+    "tls_key_file": ""
+  },
+  "redis": {
+    "host": "localhost",
+    "port": 6379,
+    "password": "",
+    "db": 0,
+    "pool_size": 10,
+    "min_idle_conns": 5,
+    "conn_timeout": 10000000000,
+    "read_timeout": 3000000000,
+    "write_timeout": 3000000000,
+    "max_retries": 3
+  },
+  "pool": {
+    "max_connections": 100,
+    "idle_timeout": 300000000000,
+    "dial_timeout": 30000000000,
+    "cleanup_interval": 60000000000
+  },
+  "scheduler": {
+    "enabled": true,
+    "default_bucket_size": 100,
+    "default_refill_rate": 10,
+    "operation_costs": {
+      "FETCH": 1,
+      "SEARCH": 5,
+      "SEND": 3,
+      "LIST": 1,
+      "RETRIEVE": 2,
+      "ATTACHMENT": 3,
+      "IDLE": 0,
+      "SYNC": 2
+    },
+    "queue_size": 1000,
+    "max_queue_wait": 1800000000000
+  },
+  "security": {
+    "encryption_key": "0123456789abcdef0123456789abcdef",
+    "webhook_secret": "",
+    "signed_url_secret": "",
+    "signed_url_expiry": 86400000000000,
+    "max_attachment_size": 52428800,
+    "allowed_origins": [],
+    "rate_limit_enabled": true,
+    "rate_limit_requests": 100,
+    "rate_limit_window": 60000000000
+  },
+  "storage": {
+    "temp_path": "./temp",
+    "attachment_path": "./temp/attachments",
+    "max_temp_size": 1073741824,
+    "cleanup_interval": 3600000000000,
+    "attachment_expiry": 86400000000000
+  },
+  "webhook": {
+    "enabled": true,
+    "max_retries": 3,
+    "retry_backoff": 60000000000,
+    "timeout": 30000000000,
+    "event_retention": 86400000000000,
+    "cleanup_interval": 3600000000000
+  },
+  "logging": {
+    "level": "debug",
+    "format": "text",
+    "output_path": "stdout",
+    "enable_json": false
+  },
+  "store": {
+    "type": "sqlite",
+    "sqlite": {
+      "path": "./data/accounts.db",
+      "max_connections": 10,
+      "busy_timeout_ms": 5000
+    }
+  }
+}

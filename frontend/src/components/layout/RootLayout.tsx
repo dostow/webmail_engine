@@ -1,9 +1,9 @@
-import { useState } from 'react';
-import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
-import { TooltipProvider } from '@/components/ui/tooltip';
-import { Toaster } from '@/components/ui/sonner';
+import { useState, useEffect } from 'react';
+import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Sidebar, Header } from '@/components/layout';
-import { AccountsView, MessagesView, ComposeView, HealthView, SettingsView, MessageDetail } from '@/components/features';
+import { Toaster } from '@/components/ui/sonner';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import { useAppStore } from '@/store/useAppStore';
 
 const navSections = [
   {
@@ -64,7 +64,6 @@ const navSections = [
   },
 ];
 
-// Map route paths to nav item IDs
 const routeToNavMap: Record<string, string> = {
   '/accounts': 'accounts',
   '/messages': 'messages',
@@ -73,7 +72,6 @@ const routeToNavMap: Record<string, string> = {
   '/settings': 'settings',
 };
 
-// Map nav item IDs to routes
 const navToRouteMap: Record<string, string> = {
   accounts: '/accounts',
   messages: '/messages',
@@ -82,7 +80,6 @@ const navToRouteMap: Record<string, string> = {
   settings: '/settings',
 };
 
-// Map nav item IDs to page titles
 const navToTitleMap: Record<string, string> = {
   accounts: 'Accounts',
   messages: 'Messages',
@@ -91,28 +88,27 @@ const navToTitleMap: Record<string, string> = {
   settings: 'Settings',
 };
 
-function AppContent() {
+export function RootLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const theme = useAppStore((state) => state.theme);
   const [apiUrl, setApiUrl] = useState(() => {
     return localStorage.getItem('apiUrl') || import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
   });
 
-  // Determine active nav item from current route
+  // Apply theme class to document
+  useEffect(() => {
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [theme]);
+
   const getActiveNavFromPath = (): string => {
     const path = location.pathname;
-
-    // Handle message detail route - show Messages as active
-    if (path.startsWith('/messages/')) {
-      return 'messages';
-    }
-
-    // Direct route match
-    if (routeToNavMap[path]) {
-      return routeToNavMap[path];
-    }
-
-    // Default to accounts
+    if (path.startsWith('/messages/')) return 'messages';
+    if (routeToNavMap[path]) return routeToNavMap[path];
     return 'accounts';
   };
 
@@ -120,58 +116,36 @@ function AppContent() {
 
   const handleNavChange = (navId: string) => {
     const route = navToRouteMap[navId];
-    if (route) {
-      navigate(route);
-    }
+    if (route) navigate(route);
   };
 
   const getPageTitle = (): string => {
-    // For message detail, show a different title
     if (location.pathname.startsWith('/messages/')) {
       const parts = location.pathname.split('/');
-      if (parts.length >= 4) {
-        return 'Message Detail';
-      }
+      if (parts.length >= 4) return 'Message Detail';
       return 'Messages';
     }
     return navToTitleMap[activeNav] || 'Webmail';
   };
 
   return (
-    <div className="flex min-h-screen">
-      <Sidebar
-        sections={navSections}
-        activeView={activeNav}
-        onViewChange={handleNavChange}
-      />
-      <main className="flex-1 ml-[250px] p-8">
-        <Header
-          title={getPageTitle()}
-          apiUrl={apiUrl}
-          onApiUrlChange={setApiUrl}
-        />
-        <Routes>
-          <Route path="/accounts" element={<AccountsView />} />
-          <Route path="/messages" element={<MessagesView />} />
-          <Route path="/messages/:accountId/:messageUid" element={<MessageDetail />} />
-          <Route path="/compose" element={<ComposeView />} />
-          <Route path="/health" element={<HealthView />} />
-          <Route path="/settings" element={<SettingsView />} />
-          <Route path="/" element={<Navigate to="/accounts" replace />} />
-          <Route path="*" element={<Navigate to="/accounts" replace />} />
-        </Routes>
-      </main>
-      <Toaster />
-    </div>
-  );
-}
-
-function App() {
-  return (
     <TooltipProvider>
-      <AppContent />
+      <div className="flex min-h-screen">
+        <Sidebar
+          sections={navSections}
+          activeView={activeNav}
+          onViewChange={handleNavChange}
+        />
+        <main className="flex-1 ml-[250px] p-8">
+          <Header
+            title={getPageTitle()}
+            apiUrl={apiUrl}
+            onApiUrlChange={setApiUrl}
+           />
+          <Outlet />
+        </main>
+        <Toaster />
+      </div>
     </TooltipProvider>
   );
 }
-
-export default App;

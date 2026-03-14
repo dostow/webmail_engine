@@ -13,7 +13,9 @@ import type {
   Message,
 } from '../types';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+import { useAppStore } from '../store/useAppStore';
+
+const getApiBaseUrl = () => useAppStore.getState().apiUrl || import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 
 class ApiError extends Error {
   code: string;
@@ -51,13 +53,13 @@ function transformMessage(message: Message): MessageDetail {
 
 // Account APIs
 export async function listAccounts(): Promise<Account[]> {
-  const response = await fetch(`${API_BASE_URL}/v1/accounts`);
+  const response = await fetch(`${getApiBaseUrl()}/v1/accounts`);
   const data = await handleResponse<{ accounts: Account[]; total: number }>(response);
   return data.accounts;
 }
 
 export async function createAccount(request: AddAccountRequest): Promise<Account> {
-  const response = await fetch(`${API_BASE_URL}/v1/accounts`, {
+  const response = await fetch(`${getApiBaseUrl()}/v1/accounts`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
@@ -66,7 +68,7 @@ export async function createAccount(request: AddAccountRequest): Promise<Account
 }
 
 export async function getAccount(id: string): Promise<Account> {
-  const response = await fetch(`${API_BASE_URL}/v1/accounts/${id}`);
+  const response = await fetch(`${getApiBaseUrl()}/v1/accounts/${id}`);
   return handleResponse<Account>(response);
 }
 
@@ -74,7 +76,7 @@ export async function updateAccount(
   id: string,
   updates: Record<string, unknown>
 ): Promise<Account> {
-  const response = await fetch(`${API_BASE_URL}/v1/accounts/${id}`, {
+  const response = await fetch(`${getApiBaseUrl()}/v1/accounts/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(updates),
@@ -83,7 +85,7 @@ export async function updateAccount(
 }
 
 export async function deleteAccount(id: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/v1/accounts/${id}`, {
+  const response = await fetch(`${getApiBaseUrl()}/v1/accounts/${id}`, {
     method: 'DELETE',
   });
   if (!response.ok) {
@@ -109,7 +111,7 @@ export async function getMessages(
   if (cursor) params.set('cursor', cursor);
 
   const response = await fetch(
-    `${API_BASE_URL}/v1/accounts/${accountId}/messages?${params}`
+    `${getApiBaseUrl()}/v1/accounts/${accountId}/messages?${params}`
   );
   return handleResponse<MessageListResponse>(response);
 }
@@ -123,7 +125,7 @@ export async function getMessage(
   if (folder) params.set('folder', folder);
 
   const response = await fetch(
-    `${API_BASE_URL}/v1/accounts/${accountId}/messages/${uid}?${params}`
+    `${getApiBaseUrl()}/v1/accounts/${accountId}/messages/${uid}?${params}`
   );
   const message = await handleResponse<Message>(response);
   return transformMessage(message);
@@ -132,7 +134,7 @@ export async function getMessage(
 export async function searchMessages(
   query: SearchQuery
 ): Promise<SearchResponse> {
-  const response = await fetch(`${API_BASE_URL}/v1/accounts/${query.account_id}/search`, {
+  const response = await fetch(`${getApiBaseUrl()}/v1/accounts/${query.account_id}/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(query),
@@ -145,7 +147,7 @@ export async function sendEmail(
   accountId: string,
   request: SendEmailRequest
 ): Promise<SendEmailResponse> {
-  const response = await fetch(`${API_BASE_URL}/v1/accounts/${accountId}/send`, {
+  const response = await fetch(`${getApiBaseUrl()}/v1/accounts/${accountId}/send`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
@@ -155,7 +157,7 @@ export async function sendEmail(
 
 // Health APIs
 export async function getSystemHealth(): Promise<SystemHealthResponse> {
-  const response = await fetch(`${API_BASE_URL}/v1/health`);
+  const response = await fetch(`${getApiBaseUrl()}/v1/health`);
   return handleResponse<SystemHealthResponse>(response);
 }
 
@@ -165,11 +167,11 @@ export async function getAccountStatus(accountId: string): Promise<{
   last_sync?: string;
   error?: string;
 }> {
-  const response = await fetch(`${API_BASE_URL}/v1/health/accounts/${accountId}`);
+  const response = await fetch(`${getApiBaseUrl()}/v1/health/accounts/${accountId}`);
   return handleResponse(response);
 }
 
 export async function getAccountStats(accountId: string): Promise<AccountStats> {
-  const response = await fetch(`${API_BASE_URL}/v1/accounts/${accountId}/stats`);
+  const response = await fetch(`${getApiBaseUrl()}/v1/accounts/${accountId}/stats`);
   return handleResponse<AccountStats>(response);
 }

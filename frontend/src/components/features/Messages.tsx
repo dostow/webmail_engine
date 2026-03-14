@@ -1,5 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLoaderData, useNavigation } from 'react-router-dom';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import {
@@ -19,65 +18,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import * as api from '@/services/api';
 import { formatMessageDate } from '@/utils/format';
 import type { Account, Message } from '@/types';
 
-interface MessagesViewProps {
-  accountId?: string;
+interface LoaderData {
+  accounts: Account[];
+  messages: Message[];
+  total: number;
+  selectedAccountId: string | null;
 }
 
-export function MessagesView({ accountId }: MessagesViewProps) {
+export function MessagesView() {
   const navigate = useNavigate();
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [selectedAccountId, setSelectedAccountId] = useState<string>('');
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { accounts, messages, selectedAccountId } = useLoaderData() as LoaderData;
+  const navigation = useNavigation();
 
-  const loadAccounts = useCallback(async () => {
-    try {
-      const data = await api.listAccounts();
-      setAccounts(data);
-      if (data.length > 0 && !accountId) {
-        setSelectedAccountId(data[0].id);
-      }
-    } catch (err) {
-      console.error('Failed to load accounts:', err);
-    }
-  }, []);
+  const loading = navigation.state === 'loading';
 
-  const loadMessages = useCallback(async (accountId: string) => {
-    try {
-      setLoading(true);
-      setError(null);
-      const response = await api.getMessages(accountId, 'INBOX', 50);
-      setMessages(response.messages);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load messages');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadAccounts();
-  }, [loadAccounts]);
-
-  useEffect(() => {
-    if (accountId) {
-      setSelectedAccountId(accountId);
-    }
-  }, [accountId]);
-
-  useEffect(() => {
-    if (selectedAccountId) {
-      loadMessages(selectedAccountId);
-    }
-  }, [selectedAccountId, loadMessages]);
-
-  const handleAccountChange = (value: string | null) => {
-    setSelectedAccountId(value || '');
+  const handleAccountChange = (value: string) => {
+    navigate(`/messages?accountId=${value}`);
   };
 
   const handleMessageClick = (message: Message) => {
@@ -108,7 +67,7 @@ export function MessagesView({ accountId }: MessagesViewProps) {
       <Card className="mb-4">
         <div className="flex items-center justify-between p-4">
           <div className="flex items-center gap-4">
-            <Select value={selectedAccountId} onValueChange={handleAccountChange}>
+            <Select value={selectedAccountId || ''} onValueChange={handleAccountChange}>
               <SelectTrigger className="w-[300px]">
                 <SelectValue placeholder="Select an account..." />
               </SelectTrigger>
@@ -123,7 +82,7 @@ export function MessagesView({ accountId }: MessagesViewProps) {
           </div>
           <Button
             variant="outline"
-            onClick={() => selectedAccountId && loadMessages(selectedAccountId)}
+            onClick={() => window.location.reload()}
             disabled={!selectedAccountId || loading}
           >
             <svg className="mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -138,10 +97,6 @@ export function MessagesView({ accountId }: MessagesViewProps) {
         {loading ? (
           <div className="flex items-center justify-center p-8">
             <p className="text-muted-foreground">Loading messages...</p>
-          </div>
-        ) : error ? (
-          <div className="flex items-center justify-center p-8">
-            <p className="text-destructive">{error}</p>
           </div>
         ) : !selectedAccountId ? (
           <div className="flex flex-col items-center justify-center p-8">

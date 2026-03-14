@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"strings"
 	"syscall"
 	"webmail_engine"
@@ -244,20 +245,23 @@ func main() {
 
 	// Register Vite handler for frontend routes (SPA support)
 	router.NoRoute(func(c *gin.Context) {
+		reqPath := c.Request.URL.Path
+
 		// Skip API routes
-		if strings.HasPrefix(c.Request.URL.Path, "/v1/") || c.Request.URL.Path == "/health" {
+		if strings.HasPrefix(reqPath, "/v1/") || reqPath == "/health" {
 			c.Status(http.StatusNotFound)
 			return
 		}
 
-		// For dev mode, proxy to Vite dev server
-		if *isDev {
-			viteHandler.ServeHTTP(c.Writer, c.Request)
-			return
+		// SPA Fallback: If the path does not have an extension, rewrite it to "/"
+		// so Vite can serve the index.html template and React Router can take over.
+		if path.Ext(reqPath) == "" {
+			c.Request.URL.Path = "/"
+			c.Status(http.StatusOK)
 		}
 
-		// For production mode, serve index.html for SPA routing
-		c.File("./frontend/dist/index.html")
+		// Let Vite handler serve the request (handles both dev proxy and prod embedded assets)
+		viteHandler.ServeHTTP(c.Writer, c.Request)
 	})
 
 	// Create HTTP server

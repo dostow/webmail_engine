@@ -1,13 +1,10 @@
-import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useLoaderData } from 'react-router-dom';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar } from '@/components/ui/avatar';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
-import { Skeleton } from '@/components/ui/skeleton';
-import * as api from '@/services/api';
 import { formatFullDate } from '@/utils/format';
 import { useEmailToast } from '@/hooks/useToast';
 import type { MessageDetail as MessageDetailType } from '@/types';
@@ -15,45 +12,8 @@ import type { MessageDetail as MessageDetailType } from '@/types';
 export function MessageDetail() {
   const navigate = useNavigate();
   const { accountId, messageUid } = useParams<{ accountId: string; messageUid: string }>();
-  const [message, setMessage] = useState<MessageDetailType | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const message = useLoaderData() as MessageDetailType;
   const { showError, showSuccess } = useEmailToast();
-
-  useEffect(() => {
-    if (!accountId || !messageUid) return;
-
-    let cancelled = false;
-
-    const loadMessage = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await api.getMessage(accountId, messageUid, 'INBOX');
-        if (!cancelled) {
-          setMessage(data);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          const msg = err instanceof Error ? err.message : 'Failed to load message';
-          setError(msg);
-          // eslint-disable-next-line react-hooks/exhaustive-deps
-          showError(msg);
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    };
-
-    loadMessage();
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accountId, messageUid]);
 
   const handleDelete = async () => {
     if (!accountId || !messageUid) return;
@@ -104,46 +64,6 @@ export function MessageDetail() {
     if (message.to?.[0]?.address) return message.to[0].address;
     return 'Me';
   };
-
-  if (loading) {
-    return (
-      <div className="message-detail">
-        <Card className="p-6">
-          <div className="flex items-start justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <Skeleton className="h-10 w-10 rounded-full" />
-              <div className="space-y-2">
-                <Skeleton className="h-4 w-32" />
-                <Skeleton className="h-3 w-24" />
-              </div>
-            </div>
-            <Skeleton className="h-8 w-24" />
-          </div>
-          <Separator className="my-4" />
-          <Skeleton className="h-6 w-3/4 mb-2" />
-          <Skeleton className="h-4 w-1/2 mb-6" />
-          <div className="space-y-2">
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-3/4" />
-          </div>
-        </Card>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="message-detail">
-        <Card className="p-6">
-          <div className="text-center py-8">
-            <p className="text-destructive mb-4">{error}</p>
-            <Button onClick={() => navigate('/messages')}>Back to Messages</Button>
-          </div>
-        </Card>
-      </div>
-    );
-  }
 
   if (!message) {
     return (

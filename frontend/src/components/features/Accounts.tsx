@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState } from 'react';
+import { useLoaderData, Form, useNavigation, useActionData } from 'react-router-dom';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -7,22 +8,7 @@ import { StatusBadge } from '@/components/ui/StatusBadge';
 import type { Account } from '@/types';
 import * as api from '@/services/api';
 
-interface AccountForm {
-  email: string;
-  password: string;
-  imap_host: string;
-  imap_port: string;
-  imap_encryption: string;
-  smtp_host: string;
-  smtp_port: string;
-  smtp_encryption: string;
-}
-
-interface AccountsViewProps {
-  onAccountAdded?: () => void;
-}
-
-const defaultForm: AccountForm = {
+const defaultForm = {
   email: '',
   password: '',
   imap_host: '',
@@ -33,65 +19,24 @@ const defaultForm: AccountForm = {
   smtp_encryption: 'starttls',
 };
 
-export function AccountsView({ onAccountAdded }: AccountsViewProps) {
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [form, setForm] = useState<AccountForm>(defaultForm);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export function AccountsView() {
+  const accounts = useLoaderData() as Account[];
+  const navigation = useNavigation();
+  const actionData = useActionData() as { error?: string } | undefined;
+  const [form, setForm] = useState(defaultForm);
 
-  const loadAccounts = useCallback(async () => {
-    try {
-      setLoading(true);
-      const data = await api.listAccounts();
-      setAccounts(data);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load accounts');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadAccounts();
-  }, [loadAccounts]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmitting(true);
-    setError(null);
-
-    try {
-      await api.createAccount({
-        email: form.email,
-        password: form.password,
-        imap_host: form.imap_host || undefined,
-        imap_port: form.imap_port ? parseInt(form.imap_port, 10) : undefined,
-        imap_encryption: form.imap_encryption || undefined,
-        smtp_host: form.smtp_host || undefined,
-        smtp_port: form.smtp_port ? parseInt(form.smtp_port, 10) : undefined,
-        smtp_encryption: form.smtp_encryption || undefined,
-      });
-
-      setForm(defaultForm);
-      onAccountAdded?.();
-      loadAccounts();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add account');
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  const submitting = navigation.state === 'submitting';
 
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this account?')) return;
 
     try {
       await api.deleteAccount(id);
-      loadAccounts();
+      // Revalidation happens automatically if we used an action, but here we're using a direct API call.
+      // Ideally we'd move this to an action too.
+      window.location.reload(); 
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete account');
+      console.error('Failed to delete account', err);
     }
   };
 
@@ -115,7 +60,7 @@ export function AccountsView({ onAccountAdded }: AccountsViewProps) {
           <h3 className="text-lg font-semibold">Add Email Account</h3>
         </div>
         <div className="p-6">
-          <form onSubmit={handleSubmit} className="max-w-[800px]">
+          <Form method="post" className="max-w-[800px]">
             <div className="mb-6 pb-6 border-b">
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -175,6 +120,7 @@ export function AccountsView({ onAccountAdded }: AccountsViewProps) {
                   <Label htmlFor="imap_encryption">Encryption</Label>
                   <select
                     id="imap_encryption"
+                    name="imap_encryption"
                     className="flex h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm"
                     value={form.imap_encryption}
                     onChange={(e) => setForm({ ...form, imap_encryption: e.target.value })}
@@ -218,6 +164,7 @@ export function AccountsView({ onAccountAdded }: AccountsViewProps) {
                   <Label htmlFor="smtp_encryption">Encryption</Label>
                   <select
                     id="smtp_encryption"
+                    name="smtp_encryption"
                     className="flex h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm"
                     value={form.smtp_encryption}
                     onChange={(e) => setForm({ ...form, smtp_encryption: e.target.value })}
@@ -231,28 +178,28 @@ export function AccountsView({ onAccountAdded }: AccountsViewProps) {
               </div>
             </div>
 
-            {error && (
+            {actionData?.error && (
               <div className="mb-4 rounded-lg border border-destructive bg-destructive/10 px-4 py-3 text-destructive">
-                {error}
+                {actionData.error}
               </div>
             )}
 
             <Button type="submit" variant="default" disabled={submitting}>
               {submitting ? 'Adding...' : 'Add Account'}
             </Button>
-          </form>
+          </Form>
         </div>
       </Card>
 
       <Card>
         <div className="flex items-center justify-between border-b px-6 py-4">
           <h3 className="text-lg font-semibold">Your Accounts</h3>
-          <Button variant="outline" size="sm" onClick={loadAccounts}>
+          <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
             Refresh
           </Button>
         </div>
         <div className="p-6">
-          {loading ? (
+          {navigation.state === 'loading' ? (
             <div className="py-12 text-center text-muted-foreground">Loading accounts...</div>
           ) : accounts.length === 0 ? (
             <div className="py-12 text-center text-muted-foreground">

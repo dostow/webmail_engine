@@ -37,8 +37,8 @@ export function Sidebar({ sections, activeView, onViewChange }: SidebarProps) {
               <div
                 key={item.id}
                 className={`flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-all ${activeView === item.id
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-muted'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-muted'
                   }`}
                 onClick={() => onViewChange(item.id)}
               >

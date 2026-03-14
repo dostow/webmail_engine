@@ -1,17 +1,17 @@
-import { useState } from 'react';
+import { useAppStore } from '@/store/useAppStore';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/label';
+import { useState } from 'react';
 
 export function SettingsView() {
-  const [apiUrl, setApiUrl] = useState(
-    localStorage.getItem('apiUrl') || 'http://localhost:8080'
-  );
+  const { apiUrl, setApiUrl } = useAppStore();
+  const [localUrl, setLocalUrl] = useState(apiUrl);
   const [saved, setSaved] = useState(false);
 
   const handleSave = () => {
-    localStorage.setItem('apiUrl', apiUrl);
+    setApiUrl(localUrl);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -29,12 +29,12 @@ export function SettingsView() {
               <Input
                 id="apiUrl"
                 type="url"
-                value={apiUrl}
-                onChange={(e) => setApiUrl(e.target.value)}
+                value={localUrl}
+                onChange={(e) => setLocalUrl(e.target.value)}
                 placeholder="http://localhost:8080"
               />
               <p className="text-sm text-muted-foreground mt-1">
-                This URL is stored locally in your browser
+                This URL is synchronized with the application store
               </p>
             </div>
             <Button variant="default" onClick={handleSave}>
@@ -53,11 +53,10 @@ export function SettingsView() {
         </div>
         <div className="p-6">
           <div className="text-center">
-            <h4 className="text-xl font-semibold mb-2">Webmail Engine Frontend</h4>
+            <h4 className="text-xl font-semibold mb-2">Webmail Engine</h4>
             <p className="text-sm text-muted-foreground mb-4">Version 1.0.0</p>
             <p className="text-sm text-muted-foreground leading-relaxed">
-              A modern React-based frontend for the Webmail Engine API.
-              Built with Vite, TypeScript, and React.
+              A modern email client powered by React Router Data APIs.
             </p>
           </div>
         </div>

@@ -1,26 +1,16 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
+import { useLoaderData, Form, useNavigation, useActionData } from 'react-router-dom';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/label';
-import type { EmailAddress } from '@/types';
-import * as api from '@/services/api';
+import type { Account } from '@/types';
 
-interface ComposeViewProps {
-  accountId?: string;
-  onSent?: () => void;
+interface LoaderData {
+  accounts: Account[];
 }
 
-interface ComposeForm {
-  to: string;
-  cc: string;
-  bcc: string;
-  subject: string;
-  textBody: string;
-  htmlBody: string;
-}
-
-const defaultForm: ComposeForm = {
+const defaultForm = {
   to: '',
   cc: '',
   bcc: '',
@@ -29,75 +19,14 @@ const defaultForm: ComposeForm = {
   htmlBody: '',
 };
 
-export function ComposeView({ accountId, onSent }: ComposeViewProps) {
-  const [accounts, setAccounts] = useState<{ id: string; email: string }[]>([]);
-  const [selectedAccountId, setSelectedAccountId] = useState<string>(accountId || '');
-  const [form, setForm] = useState<ComposeForm>(defaultForm);
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+export function ComposeView() {
+  const { accounts } = useLoaderData() as LoaderData;
+  const navigation = useNavigation();
+  const actionData = useActionData() as { error?: string } | undefined;
+  const [form, setForm] = useState(defaultForm);
   const [useHtml, setUseHtml] = useState(false);
 
-  const loadAccounts = async () => {
-    try {
-      const data = await api.listAccounts();
-      setAccounts(data.map((a) => ({ id: a.id, email: a.email })));
-      if (!accountId && data.length > 0) {
-        setSelectedAccountId(data[0].id);
-      }
-    } catch (err) {
-      console.error('Failed to load accounts:', err);
-    }
-  };
-
-  React.useEffect(() => {
-    loadAccounts();
-  }, []);
-
-  React.useEffect(() => {
-    if (accountId) {
-      setSelectedAccountId(accountId);
-    }
-  }, [accountId]);
-
-  const parseEmails = (input: string): EmailAddress[] => {
-    return input
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((email) => ({ name: '', address: email }));
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedAccountId) {
-      setError('Please select an account');
-      return;
-    }
-
-    setSending(true);
-    setError(null);
-    setSuccess(null);
-
-    try {
-      await api.sendEmail(selectedAccountId, {
-        to: parseEmails(form.to),
-        cc: form.cc ? parseEmails(form.cc) : undefined,
-        bcc: form.bcc ? parseEmails(form.bcc) : undefined,
-        subject: form.subject,
-        text_body: form.textBody,
-        html_body: useHtml ? form.htmlBody : undefined,
-      });
-
-      setSuccess('Email sent successfully!');
-      setForm(defaultForm);
-      onSent?.();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send email');
-    } finally {
-      setSending(false);
-    }
-  };
+  const sending = navigation.state === 'submitting';
 
   return (
     <div className="max-w-[800px]">
@@ -106,14 +35,14 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
           <h3 className="text-lg font-semibold">Compose Email</h3>
         </div>
         <div className="p-6">
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <Form method="post" className="flex flex-col gap-4">
             <div>
-              <Label htmlFor="fromAccount">From</Label>
+              <Label htmlFor="accountId">From</Label>
               <select
-                id="fromAccount"
+                id="accountId"
+                name="accountId"
                 className="flex h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm"
-                value={selectedAccountId}
-                onChange={(e) => setSelectedAccountId(e.target.value)}
+                defaultValue={accounts[0]?.id || ''}
               >
                 {accounts.map((account) => (
                   <option key={account.id} value={account.id}>
@@ -127,6 +56,7 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
               <Label htmlFor="to">To</Label>
               <Input
                 id="to"
+                name="to"
                 type="email"
                 placeholder="recipient@example.com"
                 value={form.to}
@@ -140,6 +70,7 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
                 <Label htmlFor="cc">Cc</Label>
                 <Input
                   id="cc"
+                  name="cc"
                   type="email"
                   placeholder="cc@example.com"
                   value={form.cc}
@@ -150,6 +81,7 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
                 <Label htmlFor="bcc">Bcc</Label>
                 <Input
                   id="bcc"
+                  name="bcc"
                   type="email"
                   placeholder="bcc@example.com"
                   value={form.bcc}
@@ -162,6 +94,7 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
               <Label htmlFor="subject">Subject</Label>
               <Input
                 id="subject"
+                name="subject"
                 type="text"
                 placeholder="Email subject"
                 value={form.subject}
@@ -198,6 +131,8 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
               </div>
               {useHtml ? (
                 <textarea
+                  id="htmlBody"
+                  name="htmlBody"
                   className="w-full min-h-[200px] rounded-lg border border-input bg-transparent px-3 py-2 text-sm font-mono outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                   placeholder="Enter HTML content..."
                   value={form.htmlBody}
@@ -206,6 +141,8 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
                 />
               ) : (
                 <textarea
+                  id="textBody"
+                  name="textBody"
                   className="w-full min-h-[200px] rounded-lg border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                   placeholder="Enter your message..."
                   value={form.textBody}
@@ -215,14 +152,9 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
               )}
             </div>
 
-            {error && (
+            {actionData?.error && (
               <div className="rounded-lg border border-destructive bg-destructive/10 px-4 py-3 text-destructive">
-                {error}
-              </div>
-            )}
-            {success && (
-              <div className="rounded-lg border border-green-600 bg-green-600/10 px-4 py-3 text-green-600">
-                {success}
+                {actionData.error}
               </div>
             )}
 
@@ -241,7 +173,7 @@ export function ComposeView({ accountId, onSent }: ComposeViewProps) {
                 Clear
               </Button>
             </div>
-          </form>
+          </Form>
         </div>
       </Card>
     </div>

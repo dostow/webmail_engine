@@ -323,6 +323,11 @@ func (a *IMAPAdapter) Search(criteria string) ([]uint32, error) {
 	return result, nil
 }
 
+// HasSortCapability checks if the server supports SORT extension (RFC 5256)
+func (a *IMAPAdapter) HasSortCapability() bool {
+	return a.client.Caps().Has(imap.CapSort)
+}
+
 // Idle starts IMAP IDLE mode for real-time updates
 func (a *IMAPAdapter) Idle(ctx context.Context, handler func(event string, data []byte)) error {
 	a.mu.Lock()
@@ -433,4 +438,45 @@ func (a *IMAPAdapter) HasCapability(cap string) bool {
 // SelectedFolder returns the currently selected folder
 func (a *IMAPAdapter) SelectedFolder() *imap.SelectData {
 	return a.selectedBox
+}
+
+// Store adds or removes flags from messages
+func (a *IMAPAdapter) Store(uids []uint32, flags []imap.Flag, add bool) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if len(uids) == 0 {
+		return nil
+	}
+
+	// Convert to imap.UIDSet
+	uidSet := imap.UIDSet{imap.UIDRange{Start: imap.UID(uids[0]), Stop: imap.UID(uids[0])}}
+	for _, uid := range uids[1:] {
+		uidSet = append(uidSet, imap.UIDRange{Start: imap.UID(uid), Stop: imap.UID(uid)})
+	}
+
+	// Store flags
+	storeFlags := imap.StoreFlags{
+		Flags: flags,
+	}
+
+	if !add {
+		// Remove flags (-FLAGS)
+		storeFlags.Op = imap.StoreFlagsDel
+	}
+
+	// Use Store command with UID set
+	cmd := a.client.Store(uidSet, &storeFlags, nil)
+	_, err := cmd.Collect()
+	return err
+}
+
+// Expunge permanently removes messages marked as deleted
+func (a *IMAPAdapter) Expunge() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	cmd := a.client.Expunge()
+	_, err := cmd.Collect()
+	return err
 }

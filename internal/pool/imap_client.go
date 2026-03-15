@@ -212,14 +212,22 @@ func (c *IMAPClient) FetchMessageRaw(uid uint32) ([]byte, error) {
 func (c *IMAPClient) Search(criteria string) ([]uint32, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	command := fmt.Sprintf("UID SEARCH %s", criteria)
 	response, err := c.sendCommand(command)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return parseSearchResponse(response)
+}
+
+// SendCommand sends a raw IMAP command and returns the response
+func (c *IMAPClient) SendCommand(command string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.sendCommand(command)
 }
 
 // Idle starts IMAP IDLE mode for real-time updates

@@ -103,12 +103,16 @@ export async function getMessages(
   accountId: string,
   folder?: string,
   limit?: number,
-  cursor?: string
+  cursor?: string,
+  sortBy?: string,
+  sortOrder?: string
 ): Promise<MessageListResponse> {
   const params = new URLSearchParams();
   if (folder) params.set('folder', folder);
   if (limit) params.set('limit', limit.toString());
   if (cursor) params.set('cursor', cursor);
+  if (sortBy) params.set('sort_by', sortBy);
+  if (sortOrder) params.set('sort_order', sortOrder);
 
   const response = await fetch(
     `${getApiBaseUrl()}/v1/accounts/${accountId}/messages?${params}`

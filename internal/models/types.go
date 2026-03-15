@@ -54,6 +54,26 @@ const (
 	FlagRecent   MessageFlag = "recent"
 )
 
+// SortField represents fields that can be used for sorting messages
+type SortField string
+
+const (
+	SortByDate        SortField = "date"
+	SortByFrom        SortField = "from"
+	SortBySubject     SortField = "subject"
+	SortByTo          SortField = "to"
+	SortBySize        SortField = "size"
+	SortByHasAttachments SortField = "has_attachments"
+)
+
+// SortOrder represents the order of sorting
+type SortOrder string
+
+const (
+	SortOrderAsc  SortOrder = "asc"
+	SortOrderDesc SortOrder = "desc"
+)
+
 // ContentType represents MIME content types
 type ContentType string
 
@@ -240,6 +260,7 @@ type MessageList struct {
 	Folder       string           `json:"folder"`
 	DataSource   string           `json:"data_source"` // cache, live
 	Freshness    time.Time        `json:"freshness"`
+	UIDValidity  uint32           `json:"uid_validity,omitempty"` // For cache validation
 }
 
 // MessageSummary represents basic message metadata for list views
@@ -287,8 +308,9 @@ type SearchQuery struct {
 	WithAttachments *bool         `json:"with_attachments,omitempty"`
 	Limit       int               `json:"limit,omitempty"`
 	Offset      int               `json:"offset,omitempty"`
-	SortBy      string            `json:"sort_by,omitempty"`
-	SortOrder   string            `json:"sort_order,omitempty"` // asc, desc
+	Cursor      string            `json:"cursor,omitempty"`
+	SortBy      SortField         `json:"sort_by,omitempty"`
+	SortOrder   SortOrder         `json:"sort_order,omitempty"`
 	UseCache    bool              `json:"use_cache"`
 }
 

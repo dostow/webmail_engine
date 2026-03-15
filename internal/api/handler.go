@@ -179,8 +179,10 @@ func (h *APIHandler) getMessages(c *gin.Context) {
 	folder := c.Query("folder")
 	limit, _ := strconv.Atoi(c.Query("limit"))
 	cursor := c.Query("cursor")
+	sortBy := models.SortField(c.Query("sort_by"))
+	sortOrder := models.SortOrder(c.Query("sort_order"))
 
-	messageList, err := h.messageService.GetMessageList(c.Request.Context(), accountID, folder, limit, cursor)
+	messageList, err := h.messageService.GetMessageList(c.Request.Context(), accountID, folder, limit, cursor, sortBy, sortOrder)
 	if err != nil {
 		respondError(c, err)
 		return

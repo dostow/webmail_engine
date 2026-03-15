@@ -17,19 +17,20 @@ export async function accountsLoader() {
 export async function messagesLoader({ params, request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const accountId = params.accountId || url.searchParams.get('accountId');
-  
+
   const accounts = await api.listAccounts();
   const selectedId = accountId || (accounts.length > 0 ? accounts[0].id : null);
-  
+
   let messages: Message[] = [];
   let total = 0;
-  
+
   if (selectedId) {
-    const response = await api.getMessages(selectedId, 'INBOX', 50);
+    // Default sort by date descending (newest first)
+    const response = await api.getMessages(selectedId, 'INBOX', 50, undefined, 'date', 'desc');
     messages = response.messages;
     total = response.total;
   }
-  
+
   return { accounts, messages, total, selectedAccountId: selectedId };
 }
 

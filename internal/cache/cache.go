@@ -449,3 +449,21 @@ func (c *Cache) Set(ctx context.Context, key string, value []byte, ttl time.Dura
 
 	return c.client.Set(ctx, key, value, ttl)
 }
+
+// Delete removes a key from cache
+func (c *Cache) Delete(ctx context.Context, key string) error {
+	if c == nil || c.client == nil {
+		return nil
+	}
+
+	return c.client.Delete(ctx, key)
+}
+
+// Keys returns all keys matching the pattern
+func (c *Cache) Keys(ctx context.Context, pattern string) ([]string, error) {
+	if c == nil || c.client == nil {
+		return nil, nil
+	}
+
+	return c.client.Keys(ctx, pattern)
+}

@@ -369,6 +369,10 @@ UseUIDs:
 	messages = s.sortMessages(messages, sortBy, sortOrder)
 	log.Printf("After sort: first message date=%s, last=%s", func() string { if len(messages) > 0 { return messages[0].Date.String() }; return "N/A" }(), func() string { if len(messages) > 0 { return messages[len(messages)-1].Date.String() }; return "N/A" }())
 
+	// Preload first 3 and last 3 message envelopes for instant display
+	// This ensures content is ready regardless of scroll position after sort
+	s.preloadStrategicMessages(ctx, accountID, messages)
+
 	// Calculate next cursor based on actual UIDs, not totalCount
 	// Include LastUID for stable pagination (prevents duplicates when new emails arrive)
 	var nextCursor string
@@ -1800,6 +1804,45 @@ func (s *MessageService) sortMessages(
 	})
 
 	return sorted
+}
+
+// preloadStrategicMessages preloads the first 3 and last 3 message envelopes
+// to ensure instant display at both ends of the sorted list.
+// This is called after sorting, so it preloads based on the final display order.
+func (s *MessageService) preloadStrategicMessages(ctx context.Context, accountID string, messages []models.MessageSummary) {
+	if s.cache == nil || len(messages) == 0 {
+		return
+	}
+
+	// Collect UIDs to preload: first 3 and last 3
+	// Avoid duplicates when list has fewer than 6 messages
+	toPreload := make([]models.MessageSummary, 0, 6)
+
+	// Preload first 3 (what user sees at top of list)
+	for i := 0; i < min(3, len(messages)); i++ {
+		toPreload = append(toPreload, messages[i])
+	}
+
+	// Preload last 3 (what user sees when scrolling to bottom)
+	// Start from max(3, len-3) to avoid duplicates if len < 6
+	startIdx := max(3, len(messages)-3)
+	for i := startIdx; i < len(messages); i++ {
+		toPreload = append(toPreload, messages[i])
+	}
+
+	if len(toPreload) == 0 {
+		return
+	}
+
+	// Cache envelopes in background (non-blocking)
+	go func() {
+		if err := s.cache.SetEnvelopes(ctx, accountID, toPreload); err != nil {
+			log.Printf("Warning: failed to preload %d envelopes: %v", len(toPreload), err)
+		} else {
+			log.Printf("Preloaded %d envelopes: first=%s, last=%s", len(toPreload),
+				toPreload[0].Subject, toPreload[len(toPreload)-1].Subject)
+		}
+	}()
 }
 
 // CursorData represents pagination cursor data for stable navigation

@@ -4,6 +4,17 @@ import (
 	"time"
 )
 
+// AuditLog represents a logged security event
+type AuditLog struct {
+	ID        int64     `json:"id"`
+	AccountID string    `json:"account_id"`
+	Email     string    `json:"email"`
+	Event     string    `json:"event"`
+	Details   string    `json:"details"`
+	Timestamp time.Time `json:"timestamp"`
+	IP        string    `json:"ip"`
+}
+
 // AccountStatus represents the current state of an email account
 type AccountStatus string
 
@@ -457,6 +468,7 @@ type ComponentHealth struct {
 	Message     string       `json:"message,omitempty"`
 	Latency     int64        `json:"latency,omitempty"`
 	ErrorRate   float64      `json:"error_rate,omitempty"`
+	Details     any          `json:"details,omitempty"`
 }
 
 // SystemPerformance represents system-wide performance metrics

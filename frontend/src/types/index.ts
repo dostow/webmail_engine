@@ -156,6 +156,13 @@ export interface SystemHealthResponse {
 export interface ComponentHealth {
   status: 'healthy' | 'degraded' | 'unhealthy';
   message?: string;
+  details?: any;
+}
+
+export interface PoolStats {
+  active_sessions: number;
+  reuse_count: number;
+  total_connects: number;
 }
 
 export interface AccountStats {

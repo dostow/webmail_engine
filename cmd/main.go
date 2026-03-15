@@ -55,7 +55,10 @@ func main() {
 	// Initialize components
 	log.Println("Initializing webmail engine...")
 
-	// Initialize Redis cache
+	// Initialize cache backend
+	var cacheClient cache.RedisClient
+	var cacheBackend string
+
 	redisClient, err := cache.NewRedisClient(cache.RedisConfig{
 		Host:     cfg.Redis.Host,
 		Port:     cfg.Redis.Port,
@@ -64,15 +67,20 @@ func main() {
 		PoolSize: cfg.Redis.PoolSize,
 	})
 	if err != nil {
-		log.Printf("Warning: Redis not available, using in-memory cache: %v", err)
-		// In production, you might want to use an in-memory fallback
-		// For now, we'll continue without cache
+		// Fallback to in-memory cache
+		log.Printf("Warning: Redis not available: %v", err)
+		memClient := cache.NewMemoryClient(cache.DefaultMemoryClientConfig())
+		cacheClient = memClient
+		cacheBackend = fmt.Sprintf("In-memory (maxKeys=%d)", cache.DefaultMemoryClientConfig().MaxSize)
+		log.Printf("Cache backend: %s", cacheBackend)
+	} else {
+		cacheClient = redisClient
+		cacheBackend = fmt.Sprintf("Redis at %s:%d, DB: %d, PoolSize: %d",
+			cfg.Redis.Host, cfg.Redis.Port, cfg.Redis.DB, cfg.Redis.PoolSize)
+		log.Printf("Cache backend: %s", cacheBackend)
 	}
 
-	var memCache *cache.Cache
-	if redisClient != nil {
-		memCache = cache.NewCache(redisClient)
-	}
+	memCache := cache.NewCache(cacheClient)
 
 	// Initialize connection pool
 	connPool := pool.NewConnectionPool(pool.PoolConfig{
@@ -147,8 +155,12 @@ func main() {
 		}
 	}
 
+	// Initialize IMAP Session Pool
+	imapSessionPool := pool.NewIMAPSessionPool(pool.DefaultSessionPoolConfig())
+	go imapSessionPool.StartMaintenance(poolCtx)
+
 	messageService, err := service.NewMessageService(
-		connPool,
+		imapSessionPool,
 		memCache,
 		fairUseScheduler,
 		accountService,
@@ -164,7 +176,7 @@ func main() {
 	attachmentStorage := storage.NewAttachmentStorage(cfg.Storage.AttachmentPath)
 
 	// Initialize sync manager with services
-	syncMgr := service.NewSyncManager(messageService, accountService)
+	syncMgr := service.NewSyncManager(messageService, accountService, imapSessionPool)
 	// Update account service with sync manager
 	accountService.SetSyncManager(syncMgr)
 
@@ -319,8 +331,8 @@ func main() {
 		accountStore.Close()
 	}
 	attachmentStorage.Shutdown()
-	if redisClient != nil {
-		redisClient.Close()
+	if cacheClient != nil {
+		cacheClient.Close()
 	}
 
 	log.Println("Webmail engine stopped")

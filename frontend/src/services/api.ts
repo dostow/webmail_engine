@@ -11,6 +11,7 @@ import type {
   AccountStats,
   APIError,
   Message,
+  PoolStats,
 } from '../types';
 
 import { useAppStore } from '../store/useAppStore';
@@ -163,6 +164,11 @@ export async function sendEmail(
 export async function getSystemHealth(): Promise<SystemHealthResponse> {
   const response = await fetch(`${getApiBaseUrl()}/v1/health`);
   return handleResponse<SystemHealthResponse>(response);
+}
+
+export async function getPoolStats(): Promise<PoolStats> {
+  const response = await fetch(`${getApiBaseUrl()}/v1/debug/pool-stats`);
+  return handleResponse<PoolStats>(response);
 }
 
 export async function getAccountStatus(accountId: string): Promise<{

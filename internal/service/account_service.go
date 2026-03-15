@@ -589,3 +589,24 @@ func stripSensitiveData(acc *models.Account) *models.Account {
 	}
 	return &copy
 }
+
+// LogAuditEntry logs a security event
+func (s *AccountService) LogAuditEntry(ctx context.Context, accountID, email, event, details, ip string) {
+	logEntry := &models.AuditLog{
+		AccountID: accountID,
+		Email:     email,
+		Event:     event,
+		Details:   details,
+		Timestamp: time.Now(),
+		IP:        ip,
+	}
+
+	if err := s.store.CreateAuditLog(ctx, logEntry); err != nil {
+		log.Printf("Failed to store audit log: %v", err)
+	}
+}
+
+// ListAuditLogs retrieves audit logs
+func (s *AccountService) ListAuditLogs(ctx context.Context, offset, limit int) ([]*models.AuditLog, int, error) {
+	return s.store.ListAuditLogs(ctx, offset, limit)
+}

@@ -46,6 +46,21 @@ func (accountDB) TableName() string {
 	return "accounts"
 }
 
+// auditLogDB is the GORM model for audit log persistence
+type auditLogDB struct {
+	ID        int64     `gorm:"primaryKey;autoIncrement"`
+	AccountID string    `gorm:"index;type:text"`
+	Email     string    `gorm:"index;type:text"`
+	Event     string    `gorm:"type:text;not null"`
+	Details   string    `gorm:"type:text"`
+	Timestamp time.Time `gorm:"index;not null"`
+	IP        string    `gorm:"type:text"`
+}
+
+func (auditLogDB) TableName() string {
+	return "audit_logs"
+}
+
 // toAccount converts accountDB to models.Account
 func (a *accountDB) toAccount() (*models.Account, error) {
 	acc := &models.Account{
@@ -243,7 +258,7 @@ func NewSQLiteStore(config SQLiteConfig) (*SQLiteStore, error) {
 // runMigrations runs GORM auto migrations
 func (s *SQLiteStore) runMigrations() error {
 	// GORM AutoMigrate handles schema creation and updates
-	if err := s.db.AutoMigrate(&accountDB{}); err != nil {
+	if err := s.db.AutoMigrate(&accountDB{}, &auditLogDB{}); err != nil {
 		return fmt.Errorf("failed to auto migrate: %w", err)
 	}
 
@@ -535,6 +550,79 @@ func (s *SQLiteStore) Health(ctx context.Context) *HealthStatus {
 		Connected: true,
 		LatencyMs: latency,
 	}
+}
+
+// CreateAuditLog stores a new audit log entry
+func (s *SQLiteStore) CreateAuditLog(ctx context.Context, log *models.AuditLog) error {
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return ErrStoreUnavailable
+	}
+	s.mu.RUnlock()
+
+	dbLog := auditLogDB{
+		AccountID: log.AccountID,
+		Email:     log.Email,
+		Event:     log.Event,
+		Details:   log.Details,
+		Timestamp: log.Timestamp,
+		IP:        log.IP,
+	}
+
+	if dbLog.Timestamp.IsZero() {
+		dbLog.Timestamp = time.Now()
+	}
+
+	result := s.db.WithContext(ctx).Create(&dbLog)
+	if result.Error != nil {
+		return fmt.Errorf("failed to create audit log: %w", result.Error)
+	}
+	log.ID = dbLog.ID
+	return nil
+}
+
+// ListAuditLogs retrieves audit logs with optional pagination
+func (s *SQLiteStore) ListAuditLogs(ctx context.Context, offset, limit int) ([]*models.AuditLog, int, error) {
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return nil, 0, ErrStoreUnavailable
+	}
+	s.mu.RUnlock()
+
+	var total int64
+	if err := s.db.Model(&auditLogDB{}).Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("failed to count audit logs: %w", err)
+	}
+
+	var dbLogs []auditLogDB
+	query := s.db.WithContext(ctx).Order("timestamp DESC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if offset > 0 {
+		query = query.Offset(offset)
+	}
+
+	if err := query.Find(&dbLogs).Error; err != nil {
+		return nil, int(total), fmt.Errorf("failed to list audit logs: %w", err)
+	}
+
+	logs := make([]*models.AuditLog, len(dbLogs))
+	for i, dl := range dbLogs {
+		logs[i] = &models.AuditLog{
+			ID:        dl.ID,
+			AccountID: dl.AccountID,
+			Email:     dl.Email,
+			Event:     dl.Event,
+			Details:   dl.Details,
+			Timestamp: dl.Timestamp,
+			IP:        dl.IP,
+		}
+	}
+
+	return logs, int(total), nil
 }
 
 // GetStats returns store statistics

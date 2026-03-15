@@ -45,7 +45,7 @@ export function HealthView() {
               </div>
 
               {Object.entries(health.components).map(([name, component]) => (
-                <div key={name} className="rounded-lg border bg-muted/50 p-6 text-center">
+                <div key={name} className="flex flex-col rounded-lg border bg-muted/50 p-6 text-center">
                   <div className="text-sm font-medium text-muted-foreground">
                     {name.charAt(0).toUpperCase() + name.slice(1)}
                   </div>
@@ -56,6 +56,22 @@ export function HealthView() {
                       showDot={false}
                     />
                   </div>
+                  {name === 'pool' && component.details && (
+                    <div className="mt-4 grid grid-cols-1 gap-1 text-xs text-muted-foreground border-t pt-2">
+                      <div className="flex justify-between">
+                        <span>Active:</span>
+                        <span className="font-mono">{component.details.active_sessions}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Reuse:</span>
+                        <span className="font-mono">{component.details.reuse_count}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Total:</span>
+                        <span className="font-mono">{component.details.total_connects}</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

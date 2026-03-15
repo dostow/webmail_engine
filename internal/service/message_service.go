@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"webmail_engine/internal/cache"
+	"webmail_engine/internal/cachekey"
 	"webmail_engine/internal/mimeparser"
 	"webmail_engine/internal/models"
 	"webmail_engine/internal/pool"
@@ -27,7 +28,7 @@ import (
 // MessageService handles message operations
 type MessageService struct {
 	mu             sync.RWMutex
-	pool           *pool.ConnectionPool
+	sessions       *pool.IMAPSessionPool
 	cache          *cache.Cache
 	scheduler      *scheduler.FairUseScheduler
 	parser         *mimeparser.MIMEParser
@@ -43,7 +44,7 @@ type MessageServiceConfig struct {
 
 // NewMessageService creates a new message service
 func NewMessageService(
-	pool *pool.ConnectionPool,
+	sessions *pool.IMAPSessionPool,
 	cache *cache.Cache,
 	scheduler *scheduler.FairUseScheduler,
 	accountService *AccountService,
@@ -53,7 +54,7 @@ func NewMessageService(
 	storage := storage.NewAttachmentStorage(config.TempStoragePath)
 
 	return &MessageService{
-		pool:           pool,
+		sessions:       sessions,
 		cache:          cache,
 		scheduler:      scheduler,
 		accountService: accountService,
@@ -132,16 +133,17 @@ func (s *MessageService) GetMessageList(
 	}
 
 	log.Printf("Connecting to IMAP %s:%d for account %s as user %s", imapConfig.Host, imapConfig.Port, accountID, imapConfig.Username)
-	client, err := pool.ConnectIMAPv2(imapCtx, imapConfig)
+	client, release, err := s.sessions.Acquire(imapCtx, accountID, imapConfig)
 	if err != nil {
 		log.Printf("IMAP connection failed: %v", err)
 		// Check for authentication errors
 		if errors.Is(err, models.ErrMailServerAuthFailed) {
+			s.accountService.LogAuditEntry(ctx, accountID, account.Email, "auth_failure", "API request failed: invalid credentials", "remote")
 			return nil, models.NewAuthError("Invalid mail server credentials")
 		}
 		return nil, models.NewServiceUnavailableError("IMAP server", err.Error())
 	}
-	defer client.Close()
+	defer release()
 
 	// Select folder and get UID validity for cache key
 	folderInfo, err := client.SelectFolder(folder)
@@ -337,6 +339,18 @@ func (s *MessageService) GetMessage(
 		folder = "INBOX"
 	}
 
+	// Try cache first - check primary key (account/folder/uid)
+	cachedMsg, err := s.getCachedMessage(ctx, accountID, folder, uid)
+	if err == nil && cachedMsg != nil {
+		// Add cache metadata
+		if cachedMsg.ProcessingMetadata == nil {
+			cachedMsg.ProcessingMetadata = &models.ProcessingMetadata{}
+		}
+		cachedMsg.ProcessingMetadata.CacheStatus = "hit"
+		log.Printf("Message cache hit: account=%s, folder=%s, uid=%s", accountID, folder, uid)
+		return cachedMsg, nil
+	}
+
 	// Get account with decrypted credentials
 	account, err := s.accountService.GetAccountWithCredentials(ctx, accountID)
 	if err != nil {
@@ -355,7 +369,7 @@ func (s *MessageService) GetMessage(
 		Encryption: account.IMAPConfig.Encryption,
 	}
 
-	client, err := pool.ConnectIMAPv2(imapCtx, imapConfig)
+	client, release, err := s.sessions.Acquire(imapCtx, accountID, imapConfig)
 	if err != nil {
 		// Check for authentication errors
 		if errors.Is(err, models.ErrMailServerAuthFailed) {
@@ -363,7 +377,7 @@ func (s *MessageService) GetMessage(
 		}
 		return nil, models.NewServiceUnavailableError("IMAP server", err.Error())
 	}
-	defer client.Close()
+	defer release()
 
 	// Select folder
 	_, err = client.SelectFolder(folder)
@@ -400,10 +414,28 @@ func (s *MessageService) GetMessage(
 		return nil, fmt.Errorf("failed to parse message: %w", err)
 	}
 
+	// Set folder and UID context on the parsed message
+	// (MIME parser doesn't have this context, so we add it here)
+	parseResult.Message.Folder = folder
+	parseResult.Message.UID = uid
+
+	// Add cache metadata
+	if parseResult.Message.ProcessingMetadata == nil {
+		parseResult.Message.ProcessingMetadata = &models.ProcessingMetadata{}
+	}
+	parseResult.Message.ProcessingMetadata.CacheStatus = "miss"
+	parseResult.Message.ProcessingMetadata.ProcessingTime = time.Since(time.Now()).Milliseconds()
+	parseResult.Message.ProcessingMetadata.SizeOriginal = int64(len(rawData))
+
+	// Cache the message with content-based deduplication
+	if err := s.setCachedMessageWithDedup(ctx, accountID, parseResult.Message); err != nil {
+		log.Printf("Warning: failed to cache message: %v", err)
+	}
+
 	// Mark message as seen (optional)
 	// client.MarkSeen(uint32(uidNum))
 
-	log.Printf("Successfully parsed message %s: %d bytes", uid, len(rawData))
+	log.Printf("Successfully parsed message %s: %d bytes (cached)", uid, len(rawData))
 	return parseResult.Message, nil
 }
 
@@ -439,7 +471,7 @@ func (s *MessageService) SearchMessages(
 		Encryption: account.IMAPConfig.Encryption,
 	}
 
-	client, err := pool.ConnectIMAPv2(imapCtx, imapConfig)
+	client, release, err := s.sessions.Acquire(imapCtx, query.AccountID, imapConfig)
 	if err != nil {
 		// Check for authentication errors
 		if errors.Is(err, models.ErrMailServerAuthFailed) {
@@ -447,7 +479,7 @@ func (s *MessageService) SearchMessages(
 		}
 		return nil, models.NewServiceUnavailableError("IMAP server", err.Error())
 	}
-	defer client.Close()
+	defer release()
 
 	// Select folder
 	folder := query.Folder
@@ -773,6 +805,195 @@ func (s *MessageService) generateQueryHash(query models.SearchQuery) string {
 	return fmt.Sprintf("%x", hash)[:32]
 }
 
+// generateContentHash generates a content-based hash for message deduplication
+// Uses Message-ID, Subject, and first 10KB of plain text body
+func (s *MessageService) generateContentHash(msg *models.Message) string {
+	if msg == nil {
+		return ""
+	}
+
+	// Build hash components
+	var builder strings.Builder
+	builder.WriteString(msg.MessageID)
+	builder.WriteString("|")
+	builder.WriteString(msg.Subject)
+	builder.WriteString("|")
+
+	// Add body content (truncate to 10KB for hashing)
+	if msg.Body != nil {
+		bodyText := msg.Body.PlainText
+		if bodyText == "" {
+			bodyText = msg.Body.Text
+		}
+		const maxBodyLen = 10240 // 10KB
+		if len(bodyText) > maxBodyLen {
+			bodyText = bodyText[:maxBodyLen]
+		}
+		builder.WriteString(bodyText)
+	}
+
+	// Generate SHA-256 hash
+	hash := sha256.Sum256([]byte(builder.String()))
+	return fmt.Sprintf("%x", hash)[:16] // Return first 16 hex chars
+}
+
+// buildContentCacheKey builds the cache key for content-based deduplication
+func (s *MessageService) buildContentCacheKey(contentHash string) string {
+	return cachekey.ContentHashKeySafe(contentHash)
+}
+
+// buildMessageCacheKey builds the primary cache key for a message
+// Uses safe builder that defaults folder to INBOX if empty
+func (s *MessageService) buildMessageCacheKey(accountID, folder, uid string) string {
+	return cachekey.MessageKeySafe(accountID, folder, uid)
+}
+
+// getCachedMessageByContent tries to get a message from cache using content hash
+// Returns the message if found via content-based deduplication
+func (s *MessageService) getCachedMessageByContent(
+	ctx context.Context,
+	accountID string,
+	msg *models.Message,
+) (*models.Message, error) {
+	if s.cache == nil {
+		return nil, nil
+	}
+
+	// Generate content hash
+	contentHash := s.generateContentHash(msg)
+	if contentHash == "" {
+		return nil, nil
+	}
+
+	// Try to get the primary key from content hash index
+	hashKey := s.buildContentCacheKey(contentHash)
+	data, err := s.cache.Get(ctx, hashKey)
+	if err != nil || len(data) == 0 {
+		return nil, nil // Cache miss
+	}
+
+	// Get the primary cache key from the hash index
+	primaryKey := string(data)
+
+	// Now fetch the actual message from the primary key
+	msgData, err := s.cache.Get(ctx, primaryKey)
+	if err != nil || len(msgData) == 0 {
+		// Hash index points to non-existent message, clean up
+		_ = s.cache.Delete(ctx, hashKey)
+		return nil, nil
+	}
+
+	// Unmarshal message
+	var cachedMsg models.Message
+	if err := json.Unmarshal(msgData, &cachedMsg); err != nil {
+		log.Printf("Failed to unmarshal cached message: %v", err)
+		return nil, err
+	}
+
+	log.Printf("Cache hit via content hash: hash=%s, primaryKey=%s", contentHash, primaryKey)
+	return &cachedMsg, nil
+}
+
+// setCachedMessageWithDedup stores a message in cache with content-based deduplication
+// Uses both primary key (account/folder/uid) and content hash index
+func (s *MessageService) setCachedMessageWithDedup(
+	ctx context.Context,
+	accountID string,
+	msg *models.Message,
+) error {
+	if s.cache == nil {
+		return nil
+	}
+
+	// Build primary cache key with validation
+	primaryKey := s.buildMessageCacheKey(accountID, msg.Folder, msg.UID)
+	if primaryKey == "" {
+		log.Printf("Warning: skipping cache for message with invalid key - account=%s, folder=%s, uid=%s", accountID, msg.Folder, msg.UID)
+		return nil
+	}
+
+	// Marshal message
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("Failed to marshal message for cache: %v", err)
+		return err
+	}
+
+	// Store message at primary key with 24 hour TTL
+	if err := s.cache.Set(ctx, primaryKey, data, cache.TTLMessage); err != nil {
+		log.Printf("Failed to cache message: %v", err)
+		return err
+	}
+
+	// Generate content hash and create index entry for deduplication
+	contentHash := s.generateContentHash(msg)
+	if contentHash != "" {
+		hashKey := s.buildContentCacheKey(contentHash)
+		// Store primary key reference with same TTL
+		if err := s.cache.Set(ctx, hashKey, []byte(primaryKey), cache.TTLMessage); err != nil {
+			log.Printf("Warning: failed to store content hash index: %v", err)
+			// Non-fatal, continue
+		}
+	}
+
+	log.Printf("Cached message with dedup: key=%s, hash=%s", primaryKey, contentHash)
+	return nil
+}
+
+// getCachedMessage retrieves a message from cache using primary key
+func (s *MessageService) getCachedMessage(
+	ctx context.Context,
+	accountID, folder, uid string,
+) (*models.Message, error) {
+	if s.cache == nil {
+		return nil, nil
+	}
+
+	cacheKey := s.buildMessageCacheKey(accountID, folder, uid)
+	data, err := s.cache.Get(ctx, cacheKey)
+	if err != nil || len(data) == 0 {
+		return nil, nil // Cache miss
+	}
+
+	var msg models.Message
+	if err := json.Unmarshal(data, &msg); err != nil {
+		log.Printf("Failed to unmarshal cached message: %v", err)
+		return nil, err
+	}
+
+	log.Printf("Cache hit: key=%s", cacheKey)
+	return &msg, nil
+}
+
+// deleteCachedMessage removes a message from cache (both primary key and content hash)
+func (s *MessageService) deleteCachedMessage(
+	ctx context.Context,
+	accountID, folder, uid string,
+	msg *models.Message,
+) error {
+	if s.cache == nil {
+		return nil
+	}
+
+	// Delete primary key
+	primaryKey := s.buildMessageCacheKey(accountID, folder, uid)
+	if err := s.cache.Delete(ctx, primaryKey); err != nil {
+		log.Printf("Warning: failed to delete message from cache: %v", err)
+	}
+
+	// Delete content hash index if message is provided
+	if msg != nil {
+		contentHash := s.generateContentHash(msg)
+		if contentHash != "" {
+			hashKey := s.buildContentCacheKey(contentHash)
+			_ = s.cache.Delete(ctx, hashKey)
+		}
+	}
+
+	log.Printf("Deleted message from cache: key=%s", primaryKey)
+	return nil
+}
+
 // FetchMessages fetches multiple messages
 func (s *MessageService) FetchMessages(
 	ctx context.Context,
@@ -888,14 +1109,14 @@ func (s *MessageService) DeleteMessage(
 		Encryption: account.IMAPConfig.Encryption,
 	}
 
-	client, err := pool.ConnectIMAPv2(imapCtx, imapConfig)
+	client, release, err := s.sessions.Acquire(imapCtx, accountID, imapConfig)
 	if err != nil {
 		if errors.Is(err, models.ErrMailServerAuthFailed) {
 			return models.NewAuthError("Invalid mail server credentials")
 		}
 		return models.NewServiceUnavailableError("IMAP server", err.Error())
 	}
-	defer client.Close()
+	defer release()
 
 	// Select folder
 	_, err = client.SelectFolder(folder)
@@ -923,8 +1144,8 @@ func (s *MessageService) DeleteMessage(
 		}
 	}
 
-	// Remove from cache
-	if err := s.cache.DeleteMessage(ctx, accountID, uid, folder); err != nil {
+	// Remove from cache (primary key only, content hash will be cleaned up on expiration)
+	if err := s.deleteCachedMessage(ctx, accountID, folder, uid, nil); err != nil {
 		log.Printf("Warning: failed to delete message from cache: %v", err)
 	}
 
@@ -1009,14 +1230,14 @@ func (s *MessageService) MarkMessagesRead(
 		Encryption: account.IMAPConfig.Encryption,
 	}
 
-	client, err := pool.ConnectIMAPv2(imapCtx, imapConfig)
+	client, release, err := s.sessions.Acquire(imapCtx, accountID, imapConfig)
 	if err != nil {
 		if errors.Is(err, models.ErrMailServerAuthFailed) {
 			return models.NewAuthError("Invalid mail server credentials")
 		}
 		return models.NewServiceUnavailableError("IMAP server", err.Error())
 	}
-	defer client.Close()
+	defer release()
 
 	// Select folder
 	_, err = client.SelectFolder(folder)
@@ -1088,14 +1309,14 @@ func (s *MessageService) ListFolders(
 		Encryption: account.IMAPConfig.Encryption,
 	}
 
-	client, err := pool.ConnectIMAPv2(imapCtx, imapConfig)
+	client, release, err := s.sessions.Acquire(imapCtx, accountID, imapConfig)
 	if err != nil {
 		if errors.Is(err, models.ErrMailServerAuthFailed) {
 			return nil, models.NewAuthError("Invalid mail server credentials")
 		}
 		return nil, models.NewServiceUnavailableError("IMAP server", err.Error())
 	}
-	defer client.Close()
+	defer release()
 
 	// List folders
 	imapFolders, err := client.ListFolders()
@@ -1171,14 +1392,14 @@ func (s *MessageService) GetFolderInfo(
 		Encryption: account.IMAPConfig.Encryption,
 	}
 
-	client, err := pool.ConnectIMAPv2(imapCtx, imapConfig)
+	client, release, err := s.sessions.Acquire(imapCtx, accountID, imapConfig)
 	if err != nil {
 		if errors.Is(err, models.ErrMailServerAuthFailed) {
 			return nil, models.NewAuthError("Invalid mail server credentials")
 		}
 		return nil, models.NewServiceUnavailableError("IMAP server", err.Error())
 	}
-	defer client.Close()
+	defer release()
 
 	// Select folder and get info
 	info, err := client.SelectFolder(folder)
@@ -1421,3 +1642,9 @@ func buildUIDSet(uids []uint32) string {
 
 	return strings.Join(sets, ",")
 }
+
+// GetPoolStats returns statistics about the IMAP session pool
+func (s *MessageService) GetPoolStats() pool.SessionPoolStats {
+	return s.sessions.Stats()
+}
+

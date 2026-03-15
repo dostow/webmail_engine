@@ -17,6 +17,7 @@ type SyncManager struct {
 	mu             sync.RWMutex
 	messageService *MessageService
 	accountService *AccountService
+	sessions       *pool.IMAPSessionPool
 	syncTasks      map[string]*SyncTask
 	globalCtx      context.Context
 	globalCancel   context.CancelFunc
@@ -36,12 +37,17 @@ type SyncTask struct {
 }
 
 // NewSyncManager creates a new sync manager
-func NewSyncManager(msgService *MessageService, accService *AccountService) *SyncManager {
+func NewSyncManager(
+	msgService *MessageService,
+	accService *AccountService,
+	sessions *pool.IMAPSessionPool,
+) *SyncManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &SyncManager{
 		messageService: msgService,
 		accountService: accService,
+		sessions:       sessions,
 		syncTasks:      make(map[string]*SyncTask),
 		globalCtx:      ctx,
 		globalCancel:   cancel,
@@ -170,38 +176,34 @@ func (m *SyncManager) runSyncLoop(task *SyncTask) {
 	}
 }
 
-// executeSync performs the actual sync operation
 func (m *SyncManager) executeSync(accountID string) (int, error) {
-	// Get account details
-	account, err := m.accountService.GetAccount(context.Background(), accountID)
+	// Get account with credentials
+	account, err := m.accountService.GetAccountWithCredentials(context.Background(), accountID)
 	if err != nil {
 		return 0, err
 	}
 
-	// Get decrypted password (would need decrypt method)
-	// For now, this is a limitation - we'd need to store the password
-	// or use OAuth2 tokens
-
-	// Connect to IMAP
+	// Connect using session pool
 	imapConfig := pool.IMAPConfig{
 		Host:       account.IMAPConfig.Host,
 		Port:       account.IMAPConfig.Port,
 		Username:   account.IMAPConfig.Username,
-		Password:   "NEED_DECRYPTED_PASSWORD", // TODO: Decrypt
+		Password:   account.IMAPConfig.Password,
 		Encryption: account.IMAPConfig.Encryption,
 	}
 
-	client, err := pool.ConnectIMAPv2(context.Background(), imapConfig)
+	client, release, err := m.sessions.Acquire(context.Background(), accountID, imapConfig)
 	if err != nil {
 		// Check for authentication errors
 		if errors.Is(err, models.ErrMailServerAuthFailed) {
-			// Mark account as requiring authentication
-			account.Status = models.AccountStatusAuthRequired
+			log.Printf("[Sync] Auth failed for %s, stopping sync task", accountID)
+			m.accountService.LogAuditEntry(context.Background(), accountID, account.Email, "auth_failure", "Sync failed: invalid credentials", "127.0.0.1")
+			go m.StopSync(accountID)
 			return 0, fmt.Errorf("authentication failed: %w", err)
 		}
 		return 0, err
 	}
-	defer client.Close()
+	defer release()
 
 	// List folders
 	folders, err := client.ListFolders()

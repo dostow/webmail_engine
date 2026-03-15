@@ -14,6 +14,7 @@ type MemoryStore struct {
 	accounts   map[string]*models.Account
 	emailIndex map[string]string // email -> account ID
 	closed     bool
+	auditLogs  []*models.AuditLog
 
 	// Statistics for monitoring
 	stats MemoryStoreStats
@@ -268,6 +269,49 @@ func (s *MemoryStore) GetStats() MemoryStoreStats {
 		Gets:    s.stats.Gets,
 		Lists:   s.stats.Lists,
 	}
+}
+
+// CreateAuditLog stores a new audit log entry
+func (s *MemoryStore) CreateAuditLog(ctx context.Context, log *models.AuditLog) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return ErrStoreUnavailable
+	}
+
+	log.ID = int64(len(s.auditLogs) + 1)
+	s.auditLogs = append(s.auditLogs, log)
+	return nil
+}
+
+// ListAuditLogs retrieves audit logs with optional pagination
+func (s *MemoryStore) ListAuditLogs(ctx context.Context, offset, limit int) ([]*models.AuditLog, int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, 0, ErrStoreUnavailable
+	}
+
+	total := len(s.auditLogs)
+	if total == 0 {
+		return []*models.AuditLog{}, 0, nil
+	}
+
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= total {
+		return []*models.AuditLog{}, total, nil
+	}
+
+	end := offset + limit
+	if limit <= 0 || end > total {
+		end = total
+	}
+
+	return s.auditLogs[offset:end], total, nil
 }
 
 // copyAccount creates a deep copy of an account

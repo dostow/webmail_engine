@@ -54,6 +54,7 @@ func (h *APIHandler) RegisterRoutes(router *gin.Engine) {
 	router.GET("/v1/health", h.getSystemHealth)
 	router.GET("/v1/health/accounts/:id", h.getAccountStatus)
 	router.GET("/v1/accounts/:id/stats", h.getAccountStats)
+	router.GET("/v1/debug/pool-stats", h.getPoolStats)
 }
 
 // Account handlers
@@ -293,6 +294,7 @@ func (h *APIHandler) sendMessage(c *gin.Context) {
 
 func (h *APIHandler) getSystemHealth(c *gin.Context) {
 	// In production, this would gather health from all components
+	poolStats := h.messageService.GetPoolStats()
 	health := &models.SystemHealthResponse{
 		Status: "healthy",
 		Score:  100,
@@ -305,6 +307,7 @@ func (h *APIHandler) getSystemHealth(c *gin.Context) {
 			},
 			"pool": {
 				Status: "healthy",
+				Details: poolStats,
 			},
 		},
 	}
@@ -361,6 +364,13 @@ func (h *APIHandler) getAccountStats(c *gin.Context) {
 
 	c.JSON(http.StatusOK, stats)
 }
+
+// getPoolStats returns the current IMAP session pool statistics
+func (h *APIHandler) getPoolStats(c *gin.Context) {
+	stats := h.messageService.GetPoolStats()
+	c.JSON(http.StatusOK, stats)
+}
+
 
 // Helper functions
 

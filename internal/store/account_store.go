@@ -72,4 +72,10 @@ type AccountStore interface {
 
 	// Health checks if the store is operational
 	Health(ctx context.Context) *HealthStatus
+	
+	// CreateAuditLog stores a new audit log entry
+	CreateAuditLog(ctx context.Context, log *models.AuditLog) error
+	
+	// ListAuditLogs retrieves audit logs with optional pagination
+	ListAuditLogs(ctx context.Context, offset, limit int) ([]*models.AuditLog, int, error)
 }

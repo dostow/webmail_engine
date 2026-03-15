@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"sync"
@@ -25,7 +27,6 @@ type AccountService struct {
 	scheduler *scheduler.FairUseScheduler
 	syncMgr   *SyncManager
 	encryptor *crypto.Encryptor
-	nextID    int
 }
 
 // AccountServiceConfig holds service configuration
@@ -57,7 +58,6 @@ func NewAccountService(
 		scheduler: scheduler,
 		syncMgr:   syncMgr,
 		encryptor: encryptor,
-		nextID:    1,
 	}, nil
 }
 
@@ -83,9 +83,8 @@ func (s *AccountService) AddAccount(ctx context.Context, req models.AddAccountRe
 		return nil, fmt.Errorf("failed to check for existing account: %w", err)
 	}
 
-	// Generate account ID
-	accountID := fmt.Sprintf("acc_%d", s.nextID)
-	s.nextID++
+	// Generate deterministic account ID based on email address
+	accountID := generateAccountID(req.Email)
 
 	// Create account
 	account := &models.Account{
@@ -696,6 +695,14 @@ func (s *AccountService) LogAuditEntry(ctx context.Context, accountID, email, ev
 	if err := s.store.CreateAuditLog(ctx, logEntry); err != nil {
 		log.Printf("Failed to store audit log: %v", err)
 	}
+}
+
+// generateAccountID generates a deterministic account ID based on the email address
+// This ensures the same email always gets the same account ID, preventing cache corruption
+func generateAccountID(email string) string {
+	hash := sha256.Sum256([]byte(email))
+	// Use first 8 bytes (16 hex chars) for a shorter ID
+	return "acc_" + hex.EncodeToString(hash[:8])
 }
 
 // ListAuditLogs retrieves audit logs

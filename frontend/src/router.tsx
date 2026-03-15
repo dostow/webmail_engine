@@ -1,22 +1,19 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { RootLayout } from '@/components/layout';
-import { 
-  AccountsView, 
-  MessagesView, 
-  ComposeView, 
-  HealthView, 
-  SettingsView, 
-  MessageDetail 
+import {
+  AccountsView,
+  MessagesView,
+  ComposeView,
+  HealthView,
+  SettingsView,
 } from '@/components/features';
-import { 
-  messageDetailLoader, 
-  accountsLoader, 
-  messagesLoader, 
+import {
+  accountsLoader,
+  messagesLoader,
   healthLoader,
   composeLoader,
   createAccountAction,
-  deleteMessageAction,
-  sendEmailAction
+  sendEmailAction,
 } from '@/lib/loaders';
 
 export const router = createBrowserRouter([
@@ -35,17 +32,13 @@ export const router = createBrowserRouter([
         action: createAccountAction,
       },
       {
+        // Single flat route — no children. Message detail is state-driven
         path: 'messages',
         element: <MessagesView />,
         loader: messagesLoader,
       },
       {
-        path: 'messages/:accountId/:messageUid',
-        element: <MessageDetail />,
-        loader: messageDetailLoader,
-        action: deleteMessageAction,
-      },
-      {
+        // Standalone compose still available from the nav
         path: 'compose',
         element: <ComposeView />,
         loader: composeLoader,

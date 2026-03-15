@@ -2,14 +2,6 @@ import { ActionFunctionArgs, LoaderFunctionArgs, redirect } from 'react-router-d
 import * as api from '@/services/api';
 import type { Message, AccountStats } from '@/types';
 
-export async function messageDetailLoader({ params }: LoaderFunctionArgs) {
-  const { accountId, messageUid } = params;
-  if (!accountId || !messageUid) {
-    throw new Error('Missing accountId or messageUid');
-  }
-  return api.getMessage(accountId, messageUid, 'INBOX');
-}
-
 export async function accountsLoader() {
   return api.listAccounts();
 }
@@ -17,6 +9,7 @@ export async function accountsLoader() {
 export async function messagesLoader({ params, request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const accountId = params.accountId || url.searchParams.get('accountId');
+  const page = parseInt(url.searchParams.get('page') || '1', 10);
 
   const accounts = await api.listAccounts();
   const selectedId = accountId || (accounts.length > 0 ? accounts[0].id : null);
@@ -25,8 +18,9 @@ export async function messagesLoader({ params, request }: LoaderFunctionArgs) {
   let total = 0;
 
   if (selectedId) {
-    // Default sort by date descending (newest first)
-    const response = await api.getMessages(selectedId, 'INBOX', 50, undefined, 'date', 'desc');
+    const offset = (page - 1) * 50;
+    const cursor = offset > 0 ? btoa(JSON.stringify({ offset })) : '';
+    const response = await api.getMessages(selectedId, 'INBOX', 50, cursor, 'date', 'desc');
     messages = response.messages;
     total = response.total;
   }
@@ -44,12 +38,13 @@ export async function healthLoader() {
     accounts.map((a) => api.getAccountStats(a.id).catch(() => null))
   );
 
-  return { 
-    health, 
-    accountStats: stats.filter(Boolean) as AccountStats[] 
+  return {
+    health,
+    accountStats: stats.filter(Boolean) as AccountStats[],
   };
 }
 
+// Kept for the standalone /compose route
 export async function composeLoader() {
   const accounts = await api.listAccounts();
   return { accounts };
@@ -58,7 +53,7 @@ export async function composeLoader() {
 export async function createAccountAction({ request }: ActionFunctionArgs) {
   const formData = await request.formData();
   const data = Object.fromEntries(formData);
-  
+
   await api.createAccount({
     email: data.email as string,
     password: data.password as string,
@@ -73,31 +68,26 @@ export async function createAccountAction({ request }: ActionFunctionArgs) {
   return redirect('/accounts');
 }
 
+// Kept for the standalone /compose route
 export async function sendEmailAction({ request }: ActionFunctionArgs) {
   const formData = await request.formData();
   const accountId = formData.get('accountId') as string;
-  const to = (formData.get('to') as string).split(',').map(email => ({ name: '', address: email.trim() }));
-  const cc = formData.get('cc') ? (formData.get('cc') as string).split(',').map(email => ({ name: '', address: email.trim() })) : undefined;
-  const bcc = formData.get('bcc') ? (formData.get('bcc') as string).split(',').map(email => ({ name: '', address: email.trim() })) : undefined;
-  
+  const to = (formData.get('to') as string).split(',').map((email) => ({ name: '', address: email.trim() }));
+  const cc = formData.get('cc')
+    ? (formData.get('cc') as string).split(',').map((email) => ({ name: '', address: email.trim() }))
+    : undefined;
+  const bcc = formData.get('bcc')
+    ? (formData.get('bcc') as string).split(',').map((email) => ({ name: '', address: email.trim() }))
+    : undefined;
+
   await api.sendEmail(accountId, {
     to,
     cc,
     bcc,
     subject: formData.get('subject') as string,
     text_body: formData.get('textBody') as string,
-    html_body: formData.get('htmlBody') as string || undefined,
+    html_body: (formData.get('htmlBody') as string) || undefined,
   });
 
-  return redirect('/messages');
-}
-
-export async function deleteMessageAction({ params }: ActionFunctionArgs) {
-  const { accountId, messageUid } = params;
-  if (!accountId || !messageUid) return null;
-  
-  // TODO: Add delete message API
-  // await api.deleteMessage(accountId, messageUid);
-  
   return redirect('/messages');
 }

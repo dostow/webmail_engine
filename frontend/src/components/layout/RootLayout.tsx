@@ -130,19 +130,23 @@ export function RootLayout() {
 
   return (
     <TooltipProvider>
-      <div className="flex min-h-screen">
+      <div className="flex h-screen overflow-hidden bg-background">
         <Sidebar
           sections={navSections}
           activeView={activeNav}
           onViewChange={handleNavChange}
         />
-        <main className="flex-1 ml-[250px] p-8">
-          <Header
-            title={getPageTitle()}
-            apiUrl={apiUrl}
-            onApiUrlChange={setApiUrl}
-           />
-          <Outlet />
+        <main className="flex-1 ml-[250px] p-6 flex flex-col h-full min-h-0">
+          <div className="shrink-0 pb-6">
+            <Header
+              title={getPageTitle()}
+              apiUrl={apiUrl}
+              onApiUrlChange={setApiUrl}
+             />
+          </div>
+          <div className="flex-1 min-h-0 flex flex-col">
+            <Outlet />
+          </div>
         </main>
         <Toaster />
       </div>

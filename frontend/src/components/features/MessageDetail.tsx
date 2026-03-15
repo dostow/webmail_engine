@@ -67,8 +67,8 @@ export function MessageDetail() {
 
   if (!message) {
     return (
-      <div className="message-detail">
-        <Card className="p-6">
+      <div className="message-detail h-full flex flex-col min-h-0">
+        <Card className="p-6 flex-1 flex flex-col items-center justify-center">
           <div className="text-center py-8">
             <p className="text-muted-foreground mb-4">Message not found</p>
             <Button onClick={() => navigate('/messages')}>Back to Messages</Button>
@@ -79,10 +79,10 @@ export function MessageDetail() {
   }
 
   return (
-    <div className="message-detail">
-      <Card className="p-6">
+    <div className="message-detail h-full flex flex-col min-h-0">
+      <Card className="p-6 flex-1 min-h-0 flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-start justify-between mb-4">
+        <div className="flex items-start justify-between mb-4 shrink-0">
           <div className="flex items-center gap-3">
             <Avatar className="h-10 w-10">
               <div className="h-full w-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium">
@@ -104,7 +104,7 @@ export function MessageDetail() {
         </div>
 
         {/* Subject */}
-        <div className="mb-4">
+        <div className="mb-4 shrink-0">
           <h2 className="text-xl font-semibold">{message.subject || '(No subject)'}</h2>
           <div className="text-sm text-muted-foreground mt-1">
             {formatFullDate(message.date)}
@@ -114,7 +114,7 @@ export function MessageDetail() {
         <Separator className="my-4" />
 
         {/* Action Buttons */}
-        <div className="flex gap-2 mb-4">
+        <div className="flex gap-2 mb-4 shrink-0">
           <Button onClick={handleReply} variant="outline" size="sm">
             <svg className="mr-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
@@ -139,7 +139,7 @@ export function MessageDetail() {
         </div>
 
         {/* Message Body */}
-        <ScrollArea className="h-[400px] w-full rounded-md border p-4">
+        <ScrollArea className="flex-1 min-h-0 w-full rounded-md border p-4">
           {message.html_body ? (
             <div dangerouslySetInnerHTML={{ __html: message.html_body }} className="prose dark:prose-invert max-w-none" />
           ) : (
@@ -149,8 +149,8 @@ export function MessageDetail() {
 
         {/* Attachments */}
         {message.attachments && message.attachments.length > 0 && (
-          <>
-            <Separator className="my-4" />
+          <div className="shrink-0 mt-4">
+            <Separator className="mb-4" />
             <div>
               <h3 className="text-sm font-medium mb-2">Attachments ({message.attachments.length})</h3>
               <div className="flex flex-wrap gap-2">
@@ -167,7 +167,7 @@ export function MessageDetail() {
                 ))}
               </div>
             </div>
-          </>
+          </div>
         )}
       </Card>
     </div>

@@ -122,10 +122,15 @@ func main() {
 	// Initialize fair-use scheduler
 	fairUseScheduler := scheduler.NewFairUseScheduler()
 
+	// Initialize IMAP Session Pool
+	imapSessionPool := pool.NewIMAPSessionPool(pool.DefaultSessionPoolConfig())
+	go imapSessionPool.StartMaintenance(poolCtx)
+
 	// Initialize services
 	accountService, err := service.NewAccountService(
 		accountStore,
 		connPool,
+		imapSessionPool,
 		memCache,
 		fairUseScheduler,
 		nil, // syncMgr will be set later
@@ -154,10 +159,6 @@ func main() {
 			}
 		}
 	}
-
-	// Initialize IMAP Session Pool
-	imapSessionPool := pool.NewIMAPSessionPool(pool.DefaultSessionPoolConfig())
-	go imapSessionPool.StartMaintenance(poolCtx)
 
 	messageService, err := service.NewMessageService(
 		imapSessionPool,

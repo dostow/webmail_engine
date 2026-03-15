@@ -168,7 +168,7 @@ func (s *SendService) SendEmail(ctx context.Context, req models.SendEmailRequest
 		defer cancel()
 	}
 
-	result, err := s.sendViaSMTP(sendCtx, req.AccountID, account.SMTPConfig, emailMsg)
+	result, err := s.sendViaSMTP(sendCtx, account.SMTPConfig, emailMsg)
 	if err != nil {
 		// Check if it's a temporary error - queue for retry
 		if isTemporaryError(err) {
@@ -414,7 +414,7 @@ func (s *SendService) sendQueuedEmail(email *QueuedEmail) error {
 	emailMsg := s.buildEmailMessage(*email.Request, account, attachments)
 
 	// Send via SMTP
-	_, err = s.sendViaSMTP(ctx, email.AccountID, account.SMTPConfig, emailMsg)
+	_, err = s.sendViaSMTP(ctx, account.SMTPConfig, emailMsg)
 	return err
 }
 
@@ -470,7 +470,7 @@ func (s *SendService) loadAttachments(attachmentIDs []string) ([]pool.Attachment
 }
 
 // sendViaSMTP sends an email via SMTP
-func (s *SendService) sendViaSMTP(ctx context.Context, accountID string, smtpConfig models.ServerConfig, msg pool.EmailMessage) (*pool.SendResult, error) {
+func (s *SendService) sendViaSMTP(ctx context.Context, smtpConfig models.ServerConfig, msg pool.EmailMessage) (*pool.SendResult, error) {
 	// Decrypt password
 	password := smtpConfig.Password
 	if password != "" {

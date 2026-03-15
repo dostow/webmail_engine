@@ -177,20 +177,82 @@ func (s *MessageService) GetMessageList(
 	if pageSize <= 0 {
 		pageSize = 50
 	}
-	startIndex := cursorData.Page * pageSize
-	endIndex := startIndex + pageSize
 
 	// For large mailboxes, fetch messages in batches to avoid "Too long argument" errors
 	// Maximum UIDs per FETCH command to stay under IMAP command length limits
 	const maxUIDsPerFetch = 100
 
-	// Search for ALL messages to get UIDs
-	allUIDs, err := client.Search("ALL")
-	if err != nil {
-		log.Printf("IMAP search failed: %v", err)
-		return nil, fmt.Errorf("search failed: %w", err)
+	// Get UIDs from cache or IMAP with intelligent invalidation
+	uidCacheKey := fmt.Sprintf("uids:%s:%s:%d", accountID, folder, uidValidity)
+	var allUIDs []uint32
+	var currentMessageCount int
+
+	// Get current folder info for comparison
+	currentMessageCount = folderInfo.Messages
+	currentModSeq := folderInfo.HighestModSeq
+
+	if s.cache != nil {
+		// Try to get cached UID list with full metadata
+		cachedUIDs, cachedCount, cachedModSeq, qresyncCapable, err := s.getCachedUIDListWithMetadata(ctx, uidCacheKey)
+
+		if err == nil && cachedUIDs != nil {
+			log.Printf("UID cache hit: %d UIDs for folder %s (modseq=%d)", len(cachedUIDs), folder, cachedModSeq)
+			refreshCache := false
+
+			// Phase 1: Check for significant count changes (deletions without QRESYNC)
+			countDiff := abs(currentMessageCount - cachedCount)
+			if countDiff > cachedCount/10 && cachedCount > 0 {
+				// More than 10% change - refresh cache
+				log.Printf("Cache invalidation: message count changed significantly (%d -> %d), refreshing", cachedCount, currentMessageCount)
+				refreshCache = true
+			} else if qresyncCapable && client.HasQResync() && currentModSeq > cachedModSeq {
+				// Phase 2: QRESYNC support - check for vanished messages
+				log.Printf("QRESYNC: modseq changed (%d -> %d), checking for vanished messages", cachedModSeq, currentModSeq)
+				vanished, err := client.UIDFetchVanished(cachedModSeq)
+				if err == nil && len(vanished) > 0 {
+					log.Printf("QRESYNC: %d messages vanished, updating cache", len(vanished))
+					// Remove vanished UIDs from cache
+					cachedUIDs = removeUIDsFromList(cachedUIDs, vanished)
+					// Update cache with new UID list
+					if err := s.setCachedUIDListWithMetadata(ctx, uidCacheKey, cachedUIDs, len(cachedUIDs), currentModSeq, true, 5*time.Minute); err != nil {
+						log.Printf("Warning: failed to update UID cache: %v", err)
+					}
+					allUIDs = cachedUIDs
+				} else {
+					allUIDs = cachedUIDs
+				}
+				goto UseUIDs
+			}
+
+			if refreshCache {
+				// Fall through to IMAP fetch
+			} else {
+				allUIDs = cachedUIDs
+				goto UseUIDs
+			}
+		}
+
+		// Cache miss or refresh needed - fetch from IMAP
+		log.Printf("UID cache miss for folder %s, fetching from IMAP", folder)
+		allUIDs, err = client.Search("ALL")
+		if err != nil {
+			log.Printf("IMAP search failed: %v", err)
+			return nil, fmt.Errorf("search failed: %w", err)
+		}
+		// Cache the UID list with metadata for 5 minutes
+		if err := s.setCachedUIDListWithMetadata(ctx, uidCacheKey, allUIDs, len(allUIDs), currentModSeq, client.HasQResync(), 5*time.Minute); err != nil {
+			log.Printf("Warning: failed to cache UID list: %v", err)
+		}
+	} else {
+		// No cache available - fetch from IMAP
+		allUIDs, err = client.Search("ALL")
+		if err != nil {
+			log.Printf("IMAP search failed: %v", err)
+			return nil, fmt.Errorf("search failed: %w", err)
+		}
 	}
 
+UseUIDs:
 	// Use actual UID count as total (folderInfo.Messages may include deleted messages)
 	totalCount := len(allUIDs)
 
@@ -213,15 +275,44 @@ func (s *MessageService) GetMessageList(
 		func() uint32 { if len(uids) > 0 { return uids[len(uids)-1] }; return 0 }(),
 	)
 
+	// Phase 3: Validate cursor anchor UID
+	// Check if the LastUID in cursor still exists (wasn't deleted)
+	// Calculate start index using LastUID for stable pagination
+	var startIndex int
+	if cursorData.LastUID > 0 && !validateCursorAnchor(cursorData, uids) {
+		log.Printf("Cursor anchor UID %d was deleted, adjusting cursor", cursorData.LastUID)
+		// Adjust start index to nearest surviving UID
+		startIndex = adjustCursorForDeletedAnchor(cursorData, uids, pageSize)
+		log.Printf("Adjusted startIndex to %d after anchor deletion", startIndex)
+	} else {
+		startIndex = cursorData.Page * pageSize
+		if cursorData.LastUID > 0 {
+			// Find the position of LastUID in the sorted UID list
+			for i, uid := range uids {
+				if uid == cursorData.LastUID {
+					startIndex = i + 1
+					log.Printf("Using LastUID %d for stable pagination, startIndex=%d", cursorData.LastUID, startIndex)
+					break
+				}
+			}
+		}
+	}
+	endIndex := startIndex + pageSize
+
 	// Apply pagination to UIDs
 	if startIndex >= len(uids) {
 		log.Printf("Start index %d beyond available UIDs (%d), returning empty", startIndex, len(uids))
 		// Cursor is beyond available messages, return empty
+		totalPages := 1
+		if totalCount > 0 {
+			totalPages = (totalCount + limit - 1) / limit
+		}
 		messageList := &models.MessageList{
 			Messages:    []models.MessageSummary{},
 			TotalCount:  totalCount,
-			PageSize:    0,
+			PageSize:    limit,
 			CurrentPage: cursorData.Page + 1,
+			TotalPages:  totalPages,
 			HasMore:     false,
 			NextCursor:  "",
 			Folder:      folder,
@@ -279,10 +370,12 @@ func (s *MessageService) GetMessageList(
 	log.Printf("After sort: first message date=%s, last=%s", func() string { if len(messages) > 0 { return messages[0].Date.String() }; return "N/A" }(), func() string { if len(messages) > 0 { return messages[len(messages)-1].Date.String() }; return "N/A" }())
 
 	// Calculate next cursor based on actual UIDs, not totalCount
+	// Include LastUID for stable pagination (prevents duplicates when new emails arrive)
 	var nextCursor string
 	if endIndex < len(uids) {
 		nextCursorData := CursorData{
 			Page:      cursorData.Page + 1,
+			LastUID:   pageUIDs[len(pageUIDs)-1], // Last UID on current page for stable navigation
 			SortBy:    sortBy,
 			SortOrder: sortOrder,
 			Timestamp: time.Now(),
@@ -293,11 +386,18 @@ func (s *MessageService) GetMessageList(
 	// Deduct tokens
 	_ = cost
 
+	// Calculate total pages
+	totalPages := 1
+	if totalCount > 0 {
+		totalPages = (totalCount + limit - 1) / limit // Ceiling division
+	}
+
 	messageList := &models.MessageList{
 		Messages:    messages,
 		TotalCount:  totalCount,
-		PageSize:    len(messages),
+		PageSize:    limit,
 		CurrentPage: cursorData.Page + 1,
+		TotalPages:  totalPages,
 		HasMore:     endIndex < len(uids),
 		NextCursor:  nextCursor,
 		Folder:      folder,
@@ -796,6 +896,135 @@ func (s *MessageService) setCachedMessageListByKey(
 
 	log.Printf("Cached message list: key=%s, count=%d", cacheKey, len(messageList.Messages))
 	return nil
+}
+
+// getCachedUIDList retrieves cached UID list for a folder
+func (s *MessageService) getCachedUIDList(ctx context.Context, cacheKey string) ([]uint32, error) {
+	data, err := s.cache.Get(ctx, cacheKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// Try new format first (with metadata)
+	var cachedData struct {
+		UIDs           []uint32 `json:"uids"`
+		MessageCount   int      `json:"message_count"`
+		HighestModSeq  uint64   `json:"highest_modseq,omitempty"`
+		CachedAt       int64    `json:"cached_at"`
+		QResyncCapable bool     `json:"qresync_capable"`
+	}
+
+	if err := json.Unmarshal(data, &cachedData); err == nil && cachedData.UIDs != nil {
+		return cachedData.UIDs, nil
+	}
+
+	// Fallback to old format (just UID array)
+	var uids []uint32
+	if err := json.Unmarshal(data, &uids); err != nil {
+		log.Printf("Failed to unmarshal cached UID list: %v", err)
+		return nil, err
+	}
+
+	return uids, nil
+}
+
+// setCachedUIDList stores UID list in cache with specified TTL
+func (s *MessageService) setCachedUIDList(
+	ctx context.Context,
+	cacheKey string,
+	uids []uint32,
+	ttl time.Duration,
+) error {
+	cachedData := struct {
+		UIDs           []uint32 `json:"uids"`
+		MessageCount   int      `json:"message_count"`
+		HighestModSeq  uint64   `json:"highest_modseq,omitempty"`
+		CachedAt       int64    `json:"cached_at"`
+		QResyncCapable bool     `json:"qresync_capable"`
+	}{
+		UIDs:           uids,
+		MessageCount:   len(uids),
+		CachedAt:       time.Now().Unix(),
+		QResyncCapable: false, // Will be updated when QRESYNC is detected
+	}
+
+	data, err := json.Marshal(cachedData)
+	if err != nil {
+		log.Printf("Failed to marshal UID list for cache: %v", err)
+		return err
+	}
+
+	if err := s.cache.Set(ctx, cacheKey, data, ttl); err != nil {
+		log.Printf("Failed to cache UID list: %v", err)
+		return err
+	}
+
+	log.Printf("Cached UID list: key=%s, count=%d", cacheKey, len(uids))
+	return nil
+}
+
+// setCachedUIDListWithMetadata stores UID list with full metadata (QRESYNC support)
+func (s *MessageService) setCachedUIDListWithMetadata(
+	ctx context.Context,
+	cacheKey string,
+	uids []uint32,
+	messageCount int,
+	highestModSeq uint64,
+	qresyncCapable bool,
+	ttl time.Duration,
+) error {
+	cachedData := struct {
+		UIDs           []uint32 `json:"uids"`
+		MessageCount   int      `json:"message_count"`
+		HighestModSeq  uint64   `json:"highest_modseq,omitempty"`
+		CachedAt       int64    `json:"cached_at"`
+		QResyncCapable bool     `json:"qresync_capable"`
+	}{
+		UIDs:           uids,
+		MessageCount:   messageCount,
+		HighestModSeq:  highestModSeq,
+		CachedAt:       time.Now().Unix(),
+		QResyncCapable: qresyncCapable,
+	}
+
+	data, err := json.Marshal(cachedData)
+	if err != nil {
+		log.Printf("Failed to marshal UID list for cache: %v", err)
+		return err
+	}
+
+	if err := s.cache.Set(ctx, cacheKey, data, ttl); err != nil {
+		log.Printf("Failed to cache UID list: %v", err)
+		return err
+	}
+
+	log.Printf("Cached UID list with metadata: key=%s, count=%d, modseq=%d", cacheKey, len(uids), highestModSeq)
+	return nil
+}
+
+// getCachedUIDListWithMetadata retrieves cached UID list with full metadata
+func (s *MessageService) getCachedUIDListWithMetadata(
+	ctx context.Context,
+	cacheKey string,
+) (uids []uint32, messageCount int, highestModSeq uint64, qresyncCapable bool, err error) {
+	data, err := s.cache.Get(ctx, cacheKey)
+	if err != nil {
+		return nil, 0, 0, false, err
+	}
+
+	var cachedData struct {
+		UIDs           []uint32 `json:"uids"`
+		MessageCount   int      `json:"message_count"`
+		HighestModSeq  uint64   `json:"highest_modseq,omitempty"`
+		CachedAt       int64    `json:"cached_at"`
+		QResyncCapable bool     `json:"qresync_capable"`
+	}
+
+	if err := json.Unmarshal(data, &cachedData); err != nil {
+		return nil, 0, 0, false, err
+	}
+
+	return cachedData.UIDs, cachedData.MessageCount, cachedData.HighestModSeq, cachedData.QResyncCapable, nil
 }
 
 // generateQueryHash generates a hash for search query caching
@@ -1573,13 +1802,19 @@ func (s *MessageService) sortMessages(
 	return sorted
 }
 
-// CursorData represents pagination cursor data
+// CursorData represents pagination cursor data for stable navigation
 type CursorData struct {
 	Page      int                 `json:"page"`
-	LastUID   string              `json:"last_uid,omitempty"`
+	LastUID   uint32              `json:"last_uid,omitempty"` // Last UID from previous page for stable pagination
 	SortBy    models.SortField    `json:"sort_by"`
 	SortOrder models.SortOrder    `json:"sort_order"`
 	Timestamp time.Time           `json:"timestamp"`
+}
+
+// LegacyCursorData represents the old cursor format (for backward compatibility)
+type LegacyCursorData struct {
+	Offset int `json:"offset,omitempty"`
+	Page   int `json:"page,omitempty"`
 }
 
 // encodeCursor encodes cursor data to a base64 string
@@ -1591,15 +1826,112 @@ func encodeCursor(data CursorData) (string, error) {
 	return base64.StdEncoding.EncodeToString(jsonData), nil
 }
 
-// decodeCursor decodes a base64 cursor string to CursorData
+// decodeCursor decodes a base64 cursor string to CursorData.
+// It handles both the current format and legacy {offset, page} format for backward compatibility.
+// If decoding fails, it returns a default cursor starting from page 0.
 func decodeCursor(cursor string) (CursorData, error) {
 	var data CursorData
+
+	if cursor == "" {
+		return data, nil
+	}
+
 	jsonData, err := base64.StdEncoding.DecodeString(cursor)
 	if err != nil {
-		return data, err
+		log.Printf("Cursor base64 decode failed: %v, starting from page 0", err)
+		return data, nil
 	}
+
+	// Try to decode as current format first
 	err = json.Unmarshal(jsonData, &data)
-	return data, err
+	if err == nil && data.Page >= 0 {
+		return data, nil
+	}
+
+	// Try legacy format {offset, page}
+	var legacy LegacyCursorData
+	if err := json.Unmarshal(jsonData, &legacy); err == nil {
+		if legacy.Page > 0 {
+			data.Page = legacy.Page - 1 // Convert 1-based to 0-based
+		} else if legacy.Offset > 0 {
+			data.Page = legacy.Offset / 50 // Assume default page size of 50
+		}
+		log.Printf("Legacy cursor format detected, converted to page %d", data.Page)
+		return data, nil
+	}
+
+	// If all decoding fails, start from page 0
+	log.Printf("Invalid cursor format, starting from page 0")
+	return data, nil
+}
+
+// abs returns the absolute value of an integer
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// removeUIDsFromList removes specified UIDs from a UID list
+func removeUIDsFromList(uids []uint32, toRemove []uint32) []uint32 {
+	if len(toRemove) == 0 {
+		return uids
+	}
+
+	// Create a set of UIDs to remove for O(1) lookup
+	removeSet := make(map[uint32]struct{}, len(toRemove))
+	for _, uid := range toRemove {
+		removeSet[uid] = struct{}{}
+	}
+
+	// Filter out removed UIDs
+	result := make([]uint32, 0, len(uids))
+	for _, uid := range uids {
+		if _, found := removeSet[uid]; !found {
+			result = append(result, uid)
+		}
+	}
+
+	return result
+}
+
+// validateCursorAnchor checks if the anchor UID in cursor still exists in the UID list
+// Returns true if valid, false if anchor was deleted
+func validateCursorAnchor(cursor CursorData, uids []uint32) bool {
+	if cursor.LastUID == 0 {
+		return true // First page, no anchor to validate
+	}
+
+	for _, uid := range uids {
+		if uid == cursor.LastUID {
+			return true
+		}
+	}
+
+	return false // Anchor UID not found - was deleted
+}
+
+// adjustCursorForDeletedAnchor adjusts cursor when anchor UID was deleted
+// Finds the nearest surviving UID and returns adjusted start index
+func adjustCursorForDeletedAnchor(cursor CursorData, uids []uint32, pageSize int) int {
+	if cursor.LastUID == 0 {
+		return cursor.Page * pageSize
+	}
+
+	// Find position where anchor UID would have been
+	insertPos := sort.Search(len(uids), func(i int) bool {
+		return uids[i] >= cursor.LastUID
+	})
+
+	// Use the position as new start index
+	// This shows messages that were "next" after the deleted one
+	if insertPos >= len(uids) {
+		// All remaining UIDs deleted, return to beginning
+		return 0
+	}
+
+	return insertPos
 }
 
 // buildUIDSet builds an IMAP UID set string from a slice of UIDs

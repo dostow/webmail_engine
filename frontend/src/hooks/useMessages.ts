@@ -1,15 +1,7 @@
 import { useCallback, useState } from 'react';
 import * as api from '@/services/api';
 import { useEmailToast } from '@/hooks/useToast';
-import type { Message } from '@/types';
-
-export interface MessageListResponse {
-  messages: Message[];
-  folder: string;
-  total: number;
-  has_more: boolean;
-  next_cursor?: string;
-}
+import type { Message, MessageListResponse } from '@/types';
 
 export interface MessageFilters {
   search?: string;

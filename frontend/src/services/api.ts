@@ -185,3 +185,16 @@ export async function getAccountStats(accountId: string): Promise<AccountStats> 
   const response = await fetch(`${getApiBaseUrl()}/v1/accounts/${accountId}/stats`);
   return handleResponse<AccountStats>(response);
 }
+
+// Server Capabilities APIs
+export async function getServerCapabilities(accountId: string): Promise<import('@/types').ServerCapabilities> {
+  const response = await fetch(`${getApiBaseUrl()}/v1/accounts/${accountId}/capabilities`);
+  return handleResponse<import('@/types').ServerCapabilities>(response);
+}
+
+export async function refreshServerCapabilities(accountId: string): Promise<{ capabilities: import('@/types').ServerCapabilities; refreshed: boolean }> {
+  const response = await fetch(`${getApiBaseUrl()}/v1/accounts/${accountId}/capabilities/refresh`, {
+    method: 'POST',
+  });
+  return handleResponse<{ capabilities: import('@/types').ServerCapabilities; refreshed: boolean }>(response);
+}

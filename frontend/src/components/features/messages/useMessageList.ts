@@ -7,18 +7,19 @@ export interface MessageListState {
   messages: Message[];
   total: number;
   folder: string;
-  
+
   // Pagination
   currentPage: number;
   pageSize: number;
   totalPages: number;
   nextCursor?: string;
-  
+  lastUid?: number; // Last UID from current page for stable pagination
+
   // UI State
   loading: boolean;
   error: string | null;
   accountId: string | null;
-  
+
   // Actions
   setAccount: (accountId: string) => void;
   setPage: (page: number) => Promise<void>;
@@ -30,6 +31,37 @@ export interface MessageListState {
 
 const MESSAGES_PER_PAGE = 50;
 
+/**
+ * Encodes cursor data to match backend's CursorData structure.
+ * Uses base64-encoded JSON with page, last_uid, sort_by, sort_order, and timestamp.
+ * Including last_uid enables stable pagination even when new emails arrive.
+ */
+function encodeCursor(page: number, lastUid?: number, sortBy: string = 'date', sortOrder: string = 'desc'): string {
+  if (page <= 1 && !lastUid) {
+    return '';
+  }
+  const cursorData: Record<string, any> = {
+    page: page - 1, // Backend uses 0-based page index
+    sort_by: sortBy,
+    sort_order: sortOrder,
+    timestamp: new Date().toISOString()
+  };
+  if (lastUid) {
+    cursorData.last_uid = lastUid;
+  }
+  return btoa(JSON.stringify(cursorData));
+}
+
+/**
+ * Extracts the last UID from a message list for stable pagination.
+ */
+function getLastUidFromMessages(messages: Message[]): number | undefined {
+  if (messages.length === 0) return undefined;
+  const lastMessage = messages[messages.length - 1];
+  const uid = parseInt(lastMessage.uid, 10);
+  return isNaN(uid) ? undefined : uid;
+}
+
 export const useMessageList = create<MessageListState>((set, get) => ({
   // Initial state
   messages: [],
@@ -39,12 +71,13 @@ export const useMessageList = create<MessageListState>((set, get) => ({
   pageSize: MESSAGES_PER_PAGE,
   totalPages: 1,
   nextCursor: undefined,
+  lastUid: undefined,
   loading: false,
   error: null,
   accountId: null,
 
   setAccount: async (accountId) => {
-    set({ accountId, loading: true, error: null, currentPage: 1 });
+    set({ accountId, loading: true, error: null, currentPage: 1, lastUid: undefined });
     await get().refresh();
   },
 
@@ -53,14 +86,14 @@ export const useMessageList = create<MessageListState>((set, get) => ({
     if (page < 1 || page > state.totalPages || page === state.currentPage) {
       return;
     }
-    
+
     set({ loading: true, error: null, currentPage: page });
-    
+
     try {
-      // Calculate cursor based on page
-      const offset = (page - 1) * MESSAGES_PER_PAGE;
-      const cursor = offset > 0 ? btoa(JSON.stringify({ offset, page })) : '';
-      
+      // Encode cursor with lastUid for stable pagination
+      // When moving forward, use the lastUid from the previous page
+      const cursor = encodeCursor(page, state.lastUid, 'date', 'desc');
+
       const response = await api.getMessages(
         state.accountId!,
         state.folder,
@@ -69,12 +102,19 @@ export const useMessageList = create<MessageListState>((set, get) => ({
         'date',
         'desc'
       );
-      
+
+      // Extract last UID for next pagination
+      const newLastUid = getLastUidFromMessages(response.messages);
+
+      // Use server's pagination values as source of truth
       set({
         messages: response.messages,
-        total: response.total,
+        total: response.total_count,
+        pageSize: response.page_size,
+        currentPage: response.current_page,
+        totalPages: response.total_pages,
         nextCursor: response.next_cursor,
-        totalPages: Math.max(1, Math.ceil(response.total / MESSAGES_PER_PAGE)),
+        lastUid: newLastUid,
         loading: false,
       });
     } catch (err) {
@@ -95,6 +135,8 @@ export const useMessageList = create<MessageListState>((set, get) => ({
   previousPage: async () => {
     const state = get();
     if (state.currentPage > 1) {
+      // When going back, we need to recalculate - clear lastUid to use page-based
+      set({ lastUid: undefined });
       await get().setPage(state.currentPage - 1);
     }
   },
@@ -102,14 +144,14 @@ export const useMessageList = create<MessageListState>((set, get) => ({
   refresh: async () => {
     const state = get();
     if (!state.accountId) return;
-    
+
     set({ loading: true, error: null });
-    
+
     try {
       const page = state.currentPage;
-      const offset = (page - 1) * MESSAGES_PER_PAGE;
-      const cursor = offset > 0 ? btoa(JSON.stringify({ offset, page })) : '';
-      
+      // On refresh, use the stored lastUid if on a non-first page
+      const cursor = encodeCursor(page, state.lastUid, 'date', 'desc');
+
       const response = await api.getMessages(
         state.accountId,
         state.folder,
@@ -118,12 +160,19 @@ export const useMessageList = create<MessageListState>((set, get) => ({
         'date',
         'desc'
       );
-      
+
+      // Extract last UID for next pagination
+      const newLastUid = getLastUidFromMessages(response.messages);
+
+      // Use server's pagination values as source of truth
       set({
         messages: response.messages,
-        total: response.total,
+        total: response.total_count,
+        pageSize: response.page_size,
+        currentPage: response.current_page,
+        totalPages: response.total_pages,
         nextCursor: response.next_cursor,
-        totalPages: Math.max(1, Math.ceil(response.total / MESSAGES_PER_PAGE)),
+        lastUid: newLastUid,
         loading: false,
       });
     } catch (err) {
@@ -141,6 +190,7 @@ export const useMessageList = create<MessageListState>((set, get) => ({
       currentPage: 1,
       totalPages: 1,
       nextCursor: undefined,
+      lastUid: undefined,
       accountId: null,
       loading: false,
       error: null,

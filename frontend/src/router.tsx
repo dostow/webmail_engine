@@ -2,10 +2,14 @@ import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { RootLayout } from '@/components/layout';
 import {
   AccountsView,
+  AccountDetailView,
+  ServersView,
+  ServerDetailView,
   MessagesView,
   ComposeView,
   HealthView,
   SettingsView,
+  ServerCapabilitiesOverviewView,
 } from '@/components/features';
 import {
   accountsLoader,
@@ -30,6 +34,22 @@ export const router = createBrowserRouter([
         element: <AccountsView />,
         loader: accountsLoader,
         action: createAccountAction,
+      },
+      {
+        path: 'accounts/:accountId',
+        element: <AccountDetailView />,
+      },
+      {
+        path: 'servers',
+        element: <ServersView />,
+      },
+      {
+        path: 'servers/:serverKey',
+        element: <ServerDetailView />,
+      },
+      {
+        path: 'capabilities',
+        element: <ServerCapabilitiesOverviewView />,
       },
       {
         // Single flat route — no children. Message detail is state-driven

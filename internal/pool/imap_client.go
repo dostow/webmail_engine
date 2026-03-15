@@ -23,6 +23,8 @@ type IMAPClient struct {
 	seqNum     uint32
 	capabilities []string
 	selectedFolder string
+	uidValidity  uint32
+	highestModSeq uint64
 }
 
 // IMAPConfig represents IMAP server configuration
@@ -37,14 +39,15 @@ type IMAPConfig struct {
 
 // FolderInfo represents IMAP folder information
 type FolderInfo struct {
-	Name       string
-	Delimiter  string
-	Attributes []string
-	Messages   int
-	Recent     int
-	Unseen     int
-	UIDNext    uint32
+	Name        string
+	Delimiter   string
+	Attributes  []string
+	Messages    int
+	Recent      int
+	Unseen      int
+	UIDNext     uint32
 	UIDValidity uint32
+	HighestModSeq uint64
 }
 
 // MessageEnvelope represents IMAP message envelope
@@ -123,6 +126,62 @@ func ConnectIMAP(ctx context.Context, config IMAPConfig) (*IMAPClient, error) {
 	return client, nil
 }
 
+// Capabilities returns the IMAP capabilities advertised by the server
+func (c *IMAPClient) Capabilities() []string {
+	return c.capabilities
+}
+
+// HasCapability checks if the server supports a specific capability
+func (c *IMAPClient) HasCapability(cap string) bool {
+	for _, c2 := range c.capabilities {
+		if strings.EqualFold(c2, cap) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasQResync checks if the server supports QRESYNC extension
+func (c *IMAPClient) HasQResync() bool {
+	for _, cap := range c.capabilities {
+		if strings.EqualFold(cap, "QRESYNC") {
+			return true
+		}
+	}
+	return false
+}
+
+// HasCondStore checks if the server supports CONDSTORE extension
+func (c *IMAPClient) HasCondStore() bool {
+	for _, cap := range c.capabilities {
+		if strings.EqualFold(cap, "CONDSTORE") || strings.EqualFold(cap, "QRESYNC") {
+			return true
+		}
+	}
+	return false
+}
+
+// GetHighestModSeq returns the highest modification sequence for the selected folder
+func (c *IMAPClient) GetHighestModSeq() uint64 {
+	return c.highestModSeq
+}
+
+// GetUIDValidity returns the UID validity value for the selected folder
+func (c *IMAPClient) GetUIDValidity() uint32 {
+	return c.uidValidity
+}
+
+// refreshCapabilities fetches and caches the server capabilities
+func (c *IMAPClient) refreshCapabilities() error {
+	response, err := c.sendCommand("CAPABILITY")
+	if err != nil {
+		return err
+	}
+
+	c.capabilities = parseCapabilityResponse(response)
+	return nil
+}
+
 // Close closes the IMAP connection
 func (c *IMAPClient) Close() error {
 	c.mu.Lock()
@@ -166,7 +225,17 @@ func (c *IMAPClient) SelectFolder(folder string) (*FolderInfo, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	response, err := c.sendCommand(fmt.Sprintf("SELECT \"%s\"", folder))
+	// Use SELECT with QRESYNC if supported to get HIGHESTMODSEQ
+	var response string
+	var err error
+
+	if c.HasQResync() {
+		// Request QRESYNC information
+		response, err = c.sendCommand(fmt.Sprintf("SELECT \"%s\"", folder))
+	} else {
+		response, err = c.sendCommand(fmt.Sprintf("SELECT \"%s\"", folder))
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -174,6 +243,10 @@ func (c *IMAPClient) SelectFolder(folder string) (*FolderInfo, error) {
 	info := parseSelectResponse(response)
 	info.Name = folder
 	c.selectedFolder = folder
+
+	// Capture UIDVALIDITY and HIGHESTMODSEQ from response
+	c.uidValidity = info.UIDValidity
+	c.highestModSeq = info.HighestModSeq
 
 	return &info, nil
 }
@@ -382,11 +455,11 @@ func parseListResponse(line string) FolderInfo {
 
 func parseSelectResponse(response string) FolderInfo {
 	var info FolderInfo
-	
+
 	lines := strings.Split(response, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		
+
 		if strings.Contains(line, "EXISTS") {
 			if n, err := extractNumber(line); err == nil {
 				info.Messages = n
@@ -407,9 +480,22 @@ func parseSelectResponse(response string) FolderInfo {
 			if n, err := extractNumber(line); err == nil {
 				info.UIDValidity = uint32(n)
 			}
+		} else if strings.Contains(line, "HIGHESTMODSEQ") {
+			// Parse HIGHESTMODSEQ value (64-bit number)
+			parts := strings.Fields(line)
+			for i, part := range parts {
+				if part == "HIGHESTMODSEQ" && i+1 < len(parts) {
+					// Remove parentheses if present
+					modSeqStr := strings.Trim(parts[i+1], "()")
+					if modSeq, err := strconv.ParseUint(modSeqStr, 10, 64); err == nil {
+						info.HighestModSeq = modSeq
+					}
+					break
+				}
+			}
 		}
 	}
-	
+
 	return info
 }
 
@@ -453,7 +539,7 @@ func parseFetchResponse(response string) ([]MessageEnvelope, error) {
 
 func parseSearchResponse(response string) ([]uint32, error) {
 	var uids []uint32
-	
+
 	lines := strings.Split(response, "\n")
 	for _, line := range lines {
 		if strings.HasPrefix(line, "* SEARCH") {
@@ -465,8 +551,93 @@ func parseSearchResponse(response string) ([]uint32, error) {
 			}
 		}
 	}
-	
+
 	return uids, nil
+}
+
+// parseCapabilityResponse parses CAPABILITY response
+func parseCapabilityResponse(response string) []string {
+	var capabilities []string
+
+	lines := strings.Split(response, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "* CAPABILITY") {
+			parts := strings.Fields(line)
+			for _, part := range parts[2:] {
+				capabilities = append(capabilities, strings.TrimSpace(part))
+			}
+		}
+	}
+
+	return capabilities
+}
+
+// UIDFetchVanished fetches messages that have been expunged since a given mod-sequence
+// Requires QRESYNC support (RFC 7162)
+func (c *IMAPClient) UIDFetchVanished(sinceModSeq uint64) ([]uint32, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.HasQResync() {
+		return nil, fmt.Errorf("QRESYNC not supported by server")
+	}
+
+	command := fmt.Sprintf("UID FETCH 1:* (FLAGS) (CHANGEDSINCE %d VANISHED)", sinceModSeq)
+	response, err := c.sendCommand(command)
+	if err != nil {
+		return nil, err
+	}
+
+	return parseVanishedResponse(response)
+}
+
+// parseVanishedResponse parses VANISHED response to get expunged UIDs
+func parseVanishedResponse(response string) ([]uint32, error) {
+	var vanished []uint32
+
+	lines := strings.Split(response, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "VANISHED") {
+			// Parse: * VANISHED (EARLIER) 41,43:116,118
+			// Find the UID list part
+			startIdx := strings.Index(line, "(")
+			if startIdx == -1 {
+				continue
+			}
+
+			// Find the content after parentheses
+			content := line[startIdx:]
+			parts := strings.FieldsFunc(content, func(r rune) bool {
+				return r == '(' || r == ')' || r == ' '
+			})
+
+			for _, part := range parts {
+				if part == "EARLIER" {
+					continue
+				}
+				// Parse UID ranges (e.g., "43:116")
+				if strings.Contains(part, ":") {
+					rangeParts := strings.Split(part, ":")
+					if len(rangeParts) == 2 {
+						start, err1 := strconv.ParseUint(rangeParts[0], 10, 32)
+						end, err2 := strconv.ParseUint(rangeParts[1], 10, 32)
+						if err1 == nil && err2 == nil {
+							for uid := start; uid <= end; uid++ {
+								vanished = append(vanished, uint32(uid))
+							}
+						}
+					}
+				} else {
+					if uid, err := strconv.ParseUint(part, 10, 32); err == nil {
+						vanished = append(vanished, uint32(uid))
+					}
+				}
+			}
+		}
+	}
+
+	return vanished, nil
 }
 
 func extractRFC822(response string) ([]byte, error) {

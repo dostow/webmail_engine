@@ -430,6 +430,93 @@ func (a *IMAPAdapter) GetClient() *imapclient.Client {
 	return a.client
 }
 
+// GetServerCapabilities detects and returns IMAP server capabilities
+func (a *IMAPAdapter) GetServerCapabilities() *models.ServerCapabilities {
+	caps := &models.ServerCapabilities{
+		Capabilities: make([]string, 0),
+		LastChecked:  time.Now(),
+	}
+
+	// Get raw capabilities from client
+	rawCaps := a.client.Caps()
+
+	// Convert to string slice and detect features
+	for cap := range rawCaps {
+		capStr := string(cap)
+		caps.Capabilities = append(caps.Capabilities, capStr)
+
+		// Detect extended capabilities
+		switch strings.ToUpper(capStr) {
+		case "QRESYNC":
+			caps.SupportsQResync = true
+			caps.SupportsCondStore = true // QRESYNC implies CONDSTORE
+		case "CONDSTORE":
+			caps.SupportsCondStore = true
+		case "SORT", "SORT=DISPLAY":
+			caps.SupportsSort = true
+		case "SEARCHRES":
+			caps.SupportsSearchRes = true
+		case "LITERAL+":
+			caps.SupportsLiteralPlus = true
+		case "UTF8=ACCEPT":
+			caps.SupportsUTF8Accept = true
+		case "UTF8=ONLY":
+			caps.SupportsUTF8Only = true
+		case "MOVE":
+			caps.SupportsMove = true
+		case "UIDPLUS":
+			caps.SupportsUIDPlus = true
+		case "UNSELECT":
+			caps.SupportsUnselect = true
+		case "IDLE":
+			caps.SupportsIdle = true
+		case "STARTTLS":
+			caps.SupportsStartTLS = true
+		}
+
+		// Detect AUTH capabilities
+		if strings.HasPrefix(strings.ToUpper(capStr), "AUTH=") {
+			authType := strings.ToUpper(strings.TrimPrefix(capStr, "AUTH="))
+			switch authType {
+			case "PLAIN":
+				caps.SupportsAuthPlain = true
+			case "LOGIN":
+				caps.SupportsAuthLogin = true
+			case "OAUTHBEARER", "OAUTH2":
+				caps.SupportsAuthOAuth2 = true
+			}
+		}
+	}
+
+	// Try to get server identification via ID command (RFC 2971)
+	if id, err := a.client.ID(nil).Wait(); err == nil && id != nil {
+		if id.Name != "" {
+			caps.ServerName = id.Name
+		}
+		if id.Vendor != "" {
+			caps.ServerVendor = id.Vendor
+		}
+		if id.Version != "" {
+			caps.ServerVersion = id.Version
+		}
+	}
+
+	return caps
+}
+
+// RefreshCapabilities fetches fresh capabilities from the server
+func (a *IMAPAdapter) RefreshCapabilities() (*models.ServerCapabilities, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Send CAPABILITY command to refresh
+	if _, err := a.client.Capability().Wait(); err != nil {
+		return nil, fmt.Errorf("failed to refresh capabilities: %w", err)
+	}
+
+	return a.GetServerCapabilities(), nil
+}
+
 // HasCapability checks if the server supports a capability
 func (a *IMAPAdapter) HasCapability(cap string) bool {
 	return a.client.Caps().Has(imap.Cap(cap))
@@ -438,6 +525,71 @@ func (a *IMAPAdapter) HasCapability(cap string) bool {
 // SelectedFolder returns the currently selected folder
 func (a *IMAPAdapter) SelectedFolder() *imap.SelectData {
 	return a.selectedBox
+}
+
+// HasQResync checks if the server supports QRESYNC extension
+func (a *IMAPAdapter) HasQResync() bool {
+	return a.client.Caps().Has(imap.CapQResync)
+}
+
+// HasCondStore checks if the server supports CONDSTORE extension
+func (a *IMAPAdapter) HasCondStore() bool {
+	return a.client.Caps().Has(imap.CapCondStore) || a.HasQResync()
+}
+
+// GetHighestModSeq returns the highest modification sequence for the selected folder
+func (a *IMAPAdapter) GetHighestModSeq() uint64 {
+	if a.selectedBox == nil {
+		return 0
+	}
+	return a.selectedBox.HighestModSeq
+}
+
+// GetUIDValidity returns the UID validity value for the selected folder
+func (a *IMAPAdapter) GetUIDValidity() uint32 {
+	if a.selectedBox == nil {
+		return 0
+	}
+	return uint32(a.selectedBox.UIDValidity)
+}
+
+// UIDFetchVanished fetches messages that have been expunged since a given mod-sequence
+// Requires QRESYNC support (RFC 7162)
+func (a *IMAPAdapter) UIDFetchVanished(sinceModSeq uint64) ([]uint32, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if !a.HasQResync() {
+		return nil, fmt.Errorf("QRESYNC not supported by server")
+	}
+
+	// Use UID FETCH with CHANGEDSINCE modifier
+	// Note: Full VANISHED support requires handling unilateral server responses
+	// This is a simplified implementation that checks for deleted messages
+	uidSet := imap.UIDSet{imap.UIDRange{Start: 1, Stop: imap.UID(^uint32(0))}}
+	fetchOptions := &imap.FetchOptions{
+		Flags:        true,
+		ChangedSince: sinceModSeq,
+	}
+
+	var vanished []uint32
+
+	// Fetch messages that changed since the mod-sequence
+	messages, err := a.client.Fetch(uidSet, fetchOptions).Collect()
+	if err != nil {
+		return nil, err
+	}
+
+	// Check for messages with Deleted flag
+	for _, msg := range messages {
+		for _, flag := range msg.Flags {
+			if flag == imap.FlagDeleted {
+				vanished = append(vanished, uint32(msg.UID))
+			}
+		}
+	}
+
+	return vanished, nil
 }
 
 // Store adds or removes flags from messages

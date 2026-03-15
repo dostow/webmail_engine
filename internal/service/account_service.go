@@ -20,6 +20,7 @@ type AccountService struct {
 	mu        sync.RWMutex
 	store     store.AccountStore
 	pool      *pool.ConnectionPool
+	sessions  *pool.IMAPSessionPool
 	cache     *cache.Cache
 	scheduler *scheduler.FairUseScheduler
 	syncMgr   *SyncManager
@@ -37,6 +38,7 @@ type AccountServiceConfig struct {
 func NewAccountService(
 	str store.AccountStore,
 	pool *pool.ConnectionPool,
+	sessions *pool.IMAPSessionPool,
 	cache *cache.Cache,
 	scheduler *scheduler.FairUseScheduler,
 	syncMgr *SyncManager,
@@ -50,6 +52,7 @@ func NewAccountService(
 	return &AccountService{
 		store:     str,
 		pool:      pool,
+		sessions:  sessions,
 		cache:     cache,
 		scheduler: scheduler,
 		syncMgr:   syncMgr,
@@ -274,32 +277,121 @@ func (s *AccountService) GetAccountWithCredentials(ctx context.Context, accountI
 
 	log.Printf("[DEBUG] Account %s loaded from store", accountID)
 
-	// Decrypt passwords
+	// Decrypt passwords (with fallback for plain text storage)
 	accountCopy := *account
 	if account.IMAPConfig.Password != "" {
 		password, err := s.encryptor.Decrypt(account.IMAPConfig.Password)
 		if err != nil {
-			log.Printf("Failed to decrypt IMAP password for account %s: %v", accountID, err)
-			return nil, fmt.Errorf("IMAP password decryption failed: %w", models.ErrPasswordDecryptionFailed)
+			// Decryption failed - password might be stored in plain text (legacy)
+			// Try to use it as-is and re-encrypt for future use
+			log.Printf("Password decryption failed for %s, assuming plain text storage: %v", accountID, err)
+			password = account.IMAPConfig.Password
+
+			// Re-encrypt the password for future use
+			if encrypted, encErr := s.encryptor.Encrypt(password); encErr == nil {
+				accountCopy.IMAPConfig.Password = encrypted
+				// Update store with encrypted password
+				if err := s.store.Update(ctx, &accountCopy); err != nil {
+					log.Printf("Warning: failed to re-encrypt IMAP password: %v", err)
+				} else {
+					log.Printf("IMAP password re-encrypted and stored for %s", accountID)
+				}
+			}
 		}
 		accountCopy.IMAPConfig.Password = password
-		log.Printf("[DEBUG] IMAP password decrypted successfully for %s (length: %d)", accountID, len(password))
+		log.Printf("[DEBUG] IMAP password loaded successfully for %s (length: %d)", accountID, len(password))
 	} else {
 		log.Printf("[DEBUG] IMAP password is empty for account %s", accountID)
 	}
 	if account.SMTPConfig.Password != "" {
 		password, err := s.encryptor.Decrypt(account.SMTPConfig.Password)
 		if err != nil {
-			log.Printf("Failed to decrypt SMTP password for account %s: %v", accountID, err)
-			return nil, fmt.Errorf("SMTP password decryption failed: %w", models.ErrPasswordDecryptionFailed)
+			// Decryption failed - password might be stored in plain text (legacy)
+			log.Printf("Password decryption failed for %s, assuming plain text storage: %v", accountID, err)
+			password = account.SMTPConfig.Password
+
+			// Re-encrypt the password for future use
+			if encrypted, encErr := s.encryptor.Encrypt(password); encErr == nil {
+				accountCopy.SMTPConfig.Password = encrypted
+				// Update store with encrypted password
+				if err := s.store.Update(ctx, &accountCopy); err != nil {
+					log.Printf("Warning: failed to re-encrypt SMTP password: %v", err)
+				} else {
+					log.Printf("SMTP password re-encrypted and stored for %s", accountID)
+				}
+			}
 		}
 		accountCopy.SMTPConfig.Password = password
-		log.Printf("[DEBUG] SMTP password decrypted successfully for %s (length: %d)", accountID, len(password))
+		log.Printf("[DEBUG] SMTP password loaded successfully for %s (length: %d)", accountID, len(password))
 	} else {
 		log.Printf("[DEBUG] SMTP password is empty for account %s", accountID)
 	}
 
 	return &accountCopy, nil
+}
+
+// DetectServerCapabilities connects to the IMAP server and detects capabilities
+func (s *AccountService) DetectServerCapabilities(ctx context.Context, accountID string) (*models.ServerCapabilities, error) {
+	// Get account with decrypted credentials
+	account, err := s.GetAccountWithCredentials(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get account: %w", err)
+	}
+
+	// Create IMAP config
+	imapConfig := pool.IMAPConfig{
+		Host:       account.IMAPConfig.Host,
+		Port:       account.IMAPConfig.Port,
+		Username:   account.IMAPConfig.Username,
+		Password:   account.IMAPConfig.Password,
+		Encryption: account.IMAPConfig.Encryption,
+	}
+
+	// Connect with timeout
+	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	client, release, err := s.sessions.Acquire(connectCtx, accountID, imapConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to IMAP server: %w", err)
+	}
+	defer release()
+
+	// Detect capabilities
+	caps := client.GetServerCapabilities()
+
+	// Store capabilities in account
+	account.ServerCapabilities = caps
+	if err := s.store.Update(ctx, account); err != nil {
+		log.Printf("Warning: failed to store server capabilities: %v", err)
+		// Don't fail the operation, capabilities were detected successfully
+	}
+
+	log.Printf("Detected server capabilities for account %s: QResync=%v, CondStore=%v, Sort=%v",
+		accountID, caps.SupportsQResync, caps.SupportsCondStore, caps.SupportsSort)
+
+	return caps, nil
+}
+
+// GetServerCapabilities returns cached server capabilities for an account
+func (s *AccountService) GetServerCapabilities(ctx context.Context, accountID string) (*models.ServerCapabilities, error) {
+	account, err := s.GetAccount(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	if account.ServerCapabilities == nil {
+		// No capabilities cached, detect them
+		return s.DetectServerCapabilities(ctx, accountID)
+	}
+
+	// Check if capabilities are stale (older than 7 days)
+	if time.Since(account.ServerCapabilities.LastChecked) > 7*24*time.Hour {
+		log.Printf("Server capabilities for account %s are stale, refreshing", accountID)
+		return s.DetectServerCapabilities(ctx, accountID)
+	}
+
+	return account.ServerCapabilities, nil
 }
 
 // GetAccount retrieves an account by ID (without sensitive data)

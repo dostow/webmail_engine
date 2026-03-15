@@ -40,6 +40,8 @@ func (h *APIHandler) RegisterRoutes(router *gin.Engine) {
 	router.GET("/v1/accounts/:id", h.getAccount)
 	router.PUT("/v1/accounts/:id", h.updateAccount)
 	router.DELETE("/v1/accounts/:id", h.deleteAccount)
+	router.GET("/v1/accounts/:id/capabilities", h.getServerCapabilities)
+	router.POST("/v1/accounts/:id/capabilities/refresh", h.refreshServerCapabilities)
 
 	// Message routes
 	router.GET("/v1/accounts/:id/messages", h.getMessages)
@@ -165,6 +167,43 @@ func (h *APIHandler) deleteAccount(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusNoContent, nil)
+}
+
+// getServerCapabilities returns the IMAP server capabilities for an account
+func (h *APIHandler) getServerCapabilities(c *gin.Context) {
+	accountID := c.Param("id")
+	if accountID == "" {
+		respondError(c, models.NewValidationError("account_id", "Account ID is required"))
+		return
+	}
+
+	capabilities, err := h.accountService.GetServerCapabilities(c.Request.Context(), accountID)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, capabilities)
+}
+
+// refreshServerCapabilities forces a fresh capability detection from the IMAP server
+func (h *APIHandler) refreshServerCapabilities(c *gin.Context) {
+	accountID := c.Param("id")
+	if accountID == "" {
+		respondError(c, models.NewValidationError("account_id", "Account ID is required"))
+		return
+	}
+
+	capabilities, err := h.accountService.DetectServerCapabilities(c.Request.Context(), accountID)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"capabilities": capabilities,
+		"refreshed":    true,
+	})
 }
 
 // Message handlers

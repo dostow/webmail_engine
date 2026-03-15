@@ -33,7 +33,7 @@ export function HealthView() {
           </div>
           <div className="p-6">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="rounded-lg bg-gradient-to-br from-primary to-primary/80 p-6 text-center text-primary-foreground">
+              <div className="rounded-lg bg-linear-to-br from-primary to-primary/80 p-6 text-center text-primary-foreground">
                 <div className="text-4xl font-bold">{health.score}</div>
                 <div className="mt-1 text-sm opacity-80">Overall Score</div>
                 <div className="mt-2">

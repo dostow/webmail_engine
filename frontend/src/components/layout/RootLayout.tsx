@@ -19,6 +19,15 @@ const navSections = [
         ),
       },
       {
+        id: 'servers',
+        label: 'Servers',
+        icon: (
+          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+          </svg>
+        ),
+      },
+      {
         id: 'messages',
         label: 'Messages',
         icon: (
@@ -42,6 +51,15 @@ const navSections = [
     title: 'System',
     items: [
       {
+        id: 'capabilities',
+        label: 'Server Capabilities',
+        icon: (
+          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+          </svg>
+        ),
+      },
+      {
         id: 'health',
         label: 'Health',
         icon: (
@@ -55,7 +73,7 @@ const navSections = [
         label: 'Settings',
         icon: (
           <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
         ),
@@ -68,6 +86,8 @@ const routeToNavMap: Record<string, string> = {
   '/accounts': 'accounts',
   '/messages': 'messages',
   '/compose': 'compose',
+  '/servers': 'servers',
+  '/capabilities': 'capabilities',
   '/health': 'health',
   '/settings': 'settings',
 };
@@ -76,6 +96,8 @@ const navToRouteMap: Record<string, string> = {
   accounts: '/accounts',
   messages: '/messages',
   compose: '/compose',
+  servers: '/servers',
+  capabilities: '/capabilities',
   health: '/health',
   settings: '/settings',
 };
@@ -84,6 +106,8 @@ const navToTitleMap: Record<string, string> = {
   accounts: 'Accounts',
   messages: 'Messages',
   compose: 'Compose',
+  servers: 'Servers',
+  capabilities: 'Server Capabilities',
   health: 'System Health',
   settings: 'Settings',
 };
@@ -108,6 +132,8 @@ export function RootLayout() {
   const getActiveNavFromPath = (): string => {
     const path = location.pathname;
     if (path.startsWith('/messages/')) return 'messages';
+    if (path.startsWith('/accounts/')) return 'accounts';
+    if (path.startsWith('/servers/')) return 'servers';
     if (routeToNavMap[path]) return routeToNavMap[path];
     return 'accounts';
   };
@@ -124,6 +150,9 @@ export function RootLayout() {
       const parts = location.pathname.split('/');
       if (parts.length >= 4) return 'Message Detail';
       return 'Messages';
+    }
+    if (location.pathname.startsWith('/accounts/')) {
+      return 'Account Details';
     }
     return navToTitleMap[activeNav] || 'Webmail';
   };

@@ -133,6 +133,38 @@ type Account struct {
 	FairUsePolicy   *FairUsePolicy  `json:"fair_use_policy,omitempty"`
 	ConnectionLimit int             `json:"connection_limit"`
 	SyncSettings    SyncSettings    `json:"sync_settings"`
+	ServerCapabilities *ServerCapabilities `json:"server_capabilities,omitempty"`
+}
+
+// ServerCapabilities represents IMAP server capabilities
+type ServerCapabilities struct {
+	// Standard IMAP capabilities
+	Capabilities []string `json:"capabilities"`
+
+	// Extended capabilities (parsed from standard capabilities)
+	SupportsQResync    bool `json:"supports_qresync"`
+	SupportsCondStore  bool `json:"supports_condstore"`
+	SupportsSort       bool `json:"supports_sort"`
+	SupportsSearchRes  bool `json:"supports_search_res"`
+	SupportsLiteralPlus bool `json:"supports_literal_plus"`
+	SupportsUTF8Accept bool `json:"supports_utf8_accept"`
+	SupportsUTF8Only   bool `json:"supports_utf8_only"`
+	SupportsMove       bool `json:"supports_move"`
+	SupportsUIDPlus    bool `json:"supports_uid_plus"`
+	SupportsUnselect   bool `json:"supports_unselect"`
+	SupportsIdle       bool `json:"supports_idle"`
+	SupportsStartTLS   bool `json:"supports_starttls"`
+	SupportsAuthPlain  bool `json:"supports_auth_plain"`
+	SupportsAuthLogin  bool `json:"supports_auth_login"`
+	SupportsAuthOAuth2 bool `json:"supports_auth_oauth2"`
+
+	// Server identification
+	ServerName     string `json:"server_name,omitempty"`
+	ServerVendor   string `json:"server_vendor,omitempty"`
+	ServerVersion  string `json:"server_version,omitempty"`
+
+	// Last capability check timestamp
+	LastChecked    time.Time `json:"last_checked"`
 }
 
 // ServerConfig represents IMAP/SMTP server configuration
@@ -266,6 +298,7 @@ type MessageList struct {
 	TotalCount   int              `json:"total_count"`
 	PageSize     int              `json:"page_size"`
 	CurrentPage  int              `json:"current_page"`
+	TotalPages   int              `json:"total_pages"`
 	HasMore      bool             `json:"has_more"`
 	NextCursor   string           `json:"next_cursor,omitempty"`
 	Folder       string           `json:"folder"`

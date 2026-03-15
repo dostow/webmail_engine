@@ -1,5 +1,9 @@
 export { AccountsView } from './Accounts';
+export { AccountDetailView } from './AccountDetail';
+export { ServersView } from './Servers';
+export { ServerDetailView } from './ServerDetail';
 export { MessagesView } from './Messages';
 export { ComposeView } from './Compose';
 export { HealthView } from './Health';
 export { SettingsView } from './Settings';
+export { ServerCapabilitiesOverviewView } from './ServerCapabilitiesOverview';

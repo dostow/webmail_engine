@@ -224,9 +224,9 @@ export function AccountsView() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => {/* TODO: Edit account */ }}
+                      onClick={() => window.location.href = `/accounts/${account.id}`}
                     >
-                      Edit
+                      View Details
                     </Button>
                     <Button
                       variant="destructive"

@@ -4,12 +4,38 @@ export interface Account {
   id: string;
   email: string;
   status: 'active' | 'inactive' | 'error' | 'syncing';
+  auth_type?: 'password' | 'oauth2' | 'app_password';
   created_at: string;
   updated_at: string;
+  last_sync_at?: string;
   imap_config: IMAPConfig;
   smtp_config: SMTPConfig;
   sync_settings: SyncSettings;
   connection_limit: number;
+  server_capabilities?: ServerCapabilities;
+}
+
+export interface ServerCapabilities {
+  capabilities: string[];
+  supports_qresync: boolean;
+  supports_condstore: boolean;
+  supports_sort: boolean;
+  supports_search_res: boolean;
+  supports_literal_plus: boolean;
+  supports_utf8_accept: boolean;
+  supports_utf8_only: boolean;
+  supports_move: boolean;
+  supports_uid_plus: boolean;
+  supports_unselect: boolean;
+  supports_idle: boolean;
+  supports_starttls: boolean;
+  supports_auth_plain: boolean;
+  supports_auth_login: boolean;
+  supports_auth_oauth2: boolean;
+  server_name?: string;
+  server_vendor?: string;
+  server_version?: string;
+  last_checked: string;
 }
 
 export interface IMAPConfig {
@@ -29,6 +55,12 @@ export interface SMTPConfig {
 export interface SyncSettings {
   sync_enabled: boolean;
   sync_interval: number;
+  historical_scope: number;
+  auto_sync: boolean;
+  include_spam: boolean;
+  include_trash: boolean;
+  max_message_size: number;
+  attachment_handling: string;
   fair_use_policy: FairUsePolicy;
 }
 
@@ -102,9 +134,14 @@ export interface Attachment {
 export interface MessageListResponse {
   messages: Message[];
   folder: string;
-  total: number;
+  total_count: number;
+  page_size: number;
+  current_page: number;
+  total_pages: number;
   has_more: boolean;
   next_cursor?: string;
+  data_source?: string;
+  freshness?: string;
 }
 
 export interface SearchQuery {

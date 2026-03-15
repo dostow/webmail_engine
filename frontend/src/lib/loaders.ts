@@ -18,11 +18,11 @@ export async function messagesLoader({ params, request }: LoaderFunctionArgs) {
   let total = 0;
 
   if (selectedId) {
-    const offset = (page - 1) * 50;
-    const cursor = offset > 0 ? btoa(JSON.stringify({ offset })) : '';
+    // Use proper cursor format matching backend's CursorData structure
+    const cursor = page > 1 ? btoa(JSON.stringify({ page: page - 1, sort_by: 'date', sort_order: 'desc' })) : '';
     const response = await api.getMessages(selectedId, 'INBOX', 50, cursor, 'date', 'desc');
     messages = response.messages;
-    total = response.total;
+    total = response.total_count;
   }
 
   return { accounts, messages, total, selectedAccountId: selectedId };

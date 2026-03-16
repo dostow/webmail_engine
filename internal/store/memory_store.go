@@ -10,11 +10,12 @@ import (
 // MemoryStore implements AccountStore using in-memory storage
 // Suitable for development, testing, or ephemeral deployments
 type MemoryStore struct {
-	mu         sync.RWMutex
-	accounts   map[string]*models.Account
-	emailIndex map[string]string // email -> account ID
-	closed     bool
-	auditLogs  []*models.AuditLog
+	mu              sync.RWMutex
+	accounts        map[string]*models.Account
+	emailIndex      map[string]string // email -> account ID
+	closed          bool
+	auditLogs       []*models.AuditLog
+	folderSyncState map[string]*models.FolderSyncState // key: accountID:folderName
 
 	// Statistics for monitoring
 	stats MemoryStoreStats
@@ -33,8 +34,9 @@ type MemoryStoreStats struct {
 // NewMemoryStore creates a new in-memory store
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		accounts:   make(map[string]*models.Account),
-		emailIndex: make(map[string]string),
+		accounts:        make(map[string]*models.Account),
+		emailIndex:      make(map[string]string),
+		folderSyncState: make(map[string]*models.FolderSyncState),
 	}
 }
 
@@ -312,6 +314,80 @@ func (s *MemoryStore) ListAuditLogs(ctx context.Context, offset, limit int) ([]*
 	}
 
 	return s.auditLogs[offset:end], total, nil
+}
+
+// GetFolderSyncState retrieves sync state for a folder
+func (s *MemoryStore) GetFolderSyncState(ctx context.Context, accountID, folderName string) (*models.FolderSyncState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, ErrStoreUnavailable
+	}
+
+	key := accountID + ":" + folderName
+	state, exists := s.folderSyncState[key]
+	if !exists {
+		return nil, ErrNotFound
+	}
+
+	// Return a copy
+	stateCopy := *state
+	return &stateCopy, nil
+}
+
+// UpsertFolderSyncState creates or updates folder sync state
+func (s *MemoryStore) UpsertFolderSyncState(ctx context.Context, state *models.FolderSyncState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return ErrStoreUnavailable
+	}
+
+	if state == nil {
+		return ErrInvalidConfig
+	}
+
+	key := state.AccountID + ":" + state.FolderName
+	s.folderSyncState[key] = state
+	return nil
+}
+
+// DeleteFolderSyncState removes folder sync state
+func (s *MemoryStore) DeleteFolderSyncState(ctx context.Context, accountID, folderName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return ErrStoreUnavailable
+	}
+
+	key := accountID + ":" + folderName
+	delete(s.folderSyncState, key)
+	return nil
+}
+
+// ListFolderSyncStates lists all folder sync states for an account
+func (s *MemoryStore) ListFolderSyncStates(ctx context.Context, accountID string) ([]*models.FolderSyncState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, ErrStoreUnavailable
+	}
+
+	result := make([]*models.FolderSyncState, 0)
+	for key, state := range s.folderSyncState {
+		if state.AccountID == accountID {
+			// Return a copy
+			stateCopy := *state
+			result = append(result, &stateCopy)
+		}
+		_ = key // avoid unused variable warning
+	}
+
+	return result, nil
 }
 
 // copyAccount creates a deep copy of an account

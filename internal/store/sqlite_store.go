@@ -61,6 +61,47 @@ func (auditLogDB) TableName() string {
 	return "audit_logs"
 }
 
+// folderSyncStateDB is the GORM model for folder sync state persistence
+type folderSyncStateDB struct {
+	AccountID     string    `gorm:"primaryKey;type:text;not null"`
+	FolderName    string    `gorm:"primaryKey;type:text;not null"`
+	UIDValidity   uint32    `gorm:"column:uid_validity;not null"`
+	LastSyncedUID uint32    `gorm:"column:last_synced_uid;not null"`
+	LastSyncTime  time.Time `gorm:"column:last_sync_time;not null"`
+	MessageCount  uint32    `gorm:"column:message_count;not null"`
+	IsInitialized bool      `gorm:"column:is_initialized;not null"`
+	UpdatedAt     time.Time `gorm:"column:updated_at;not null"`
+}
+
+func (folderSyncStateDB) TableName() string {
+	return "folder_sync_states"
+}
+
+// toFolderSyncState converts folderSyncStateDB to models.FolderSyncState
+func (f *folderSyncStateDB) toFolderSyncState() *models.FolderSyncState {
+	return &models.FolderSyncState{
+		AccountID:     f.AccountID,
+		FolderName:    f.FolderName,
+		UIDValidity:   f.UIDValidity,
+		LastSyncedUID: f.LastSyncedUID,
+		LastSyncTime:  f.LastSyncTime,
+		MessageCount:  f.MessageCount,
+		IsInitialized: f.IsInitialized,
+	}
+}
+
+// fromFolderSyncState converts models.FolderSyncState to folderSyncStateDB
+func (f *folderSyncStateDB) fromFolderSyncState(state *models.FolderSyncState) {
+	f.AccountID = state.AccountID
+	f.FolderName = state.FolderName
+	f.UIDValidity = state.UIDValidity
+	f.LastSyncedUID = state.LastSyncedUID
+	f.LastSyncTime = state.LastSyncTime
+	f.MessageCount = state.MessageCount
+	f.IsInitialized = state.IsInitialized
+	f.UpdatedAt = time.Now()
+}
+
 // toAccount converts accountDB to models.Account
 func (a *accountDB) toAccount() (*models.Account, error) {
 	acc := &models.Account{
@@ -258,7 +299,7 @@ func NewSQLiteStore(config SQLiteConfig) (*SQLiteStore, error) {
 // runMigrations runs GORM auto migrations
 func (s *SQLiteStore) runMigrations() error {
 	// GORM AutoMigrate handles schema creation and updates
-	if err := s.db.AutoMigrate(&accountDB{}, &auditLogDB{}); err != nil {
+	if err := s.db.AutoMigrate(&accountDB{}, &auditLogDB{}, &folderSyncStateDB{}); err != nil {
 		return fmt.Errorf("failed to auto migrate: %w", err)
 	}
 
@@ -623,6 +664,88 @@ func (s *SQLiteStore) ListAuditLogs(ctx context.Context, offset, limit int) ([]*
 	}
 
 	return logs, int(total), nil
+}
+
+// GetFolderSyncState retrieves sync state for a folder
+func (s *SQLiteStore) GetFolderSyncState(ctx context.Context, accountID, folderName string) (*models.FolderSyncState, error) {
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return nil, ErrStoreUnavailable
+	}
+	s.mu.RUnlock()
+
+	var dbState folderSyncStateDB
+	if err := s.db.WithContext(ctx).First(&dbState, "account_id = ? AND folder_name = ?", accountID, folderName).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to get folder sync state: %w", err)
+	}
+
+	return dbState.toFolderSyncState(), nil
+}
+
+// UpsertFolderSyncState creates or updates folder sync state
+func (s *SQLiteStore) UpsertFolderSyncState(ctx context.Context, state *models.FolderSyncState) error {
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return ErrStoreUnavailable
+	}
+	s.mu.RUnlock()
+
+	if state == nil {
+		return ErrInvalidConfig
+	}
+
+	var dbState folderSyncStateDB
+	dbState.fromFolderSyncState(state)
+
+	// Use Save for upsert behavior (update on conflict)
+	if err := s.db.WithContext(ctx).Save(&dbState).Error; err != nil {
+		return fmt.Errorf("failed to upsert folder sync state: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteFolderSyncState removes folder sync state
+func (s *SQLiteStore) DeleteFolderSyncState(ctx context.Context, accountID, folderName string) error {
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return ErrStoreUnavailable
+	}
+	s.mu.RUnlock()
+
+	if err := s.db.WithContext(ctx).Delete(&folderSyncStateDB{}, "account_id = ? AND folder_name = ?", accountID, folderName).Error; err != nil {
+		return fmt.Errorf("failed to delete folder sync state: %w", err)
+	}
+
+	return nil
+}
+
+// ListFolderSyncStates lists all folder sync states for an account
+func (s *SQLiteStore) ListFolderSyncStates(ctx context.Context, accountID string) ([]*models.FolderSyncState, error) {
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return nil, ErrStoreUnavailable
+	}
+	s.mu.RUnlock()
+
+	var dbStates []folderSyncStateDB
+	if err := s.db.WithContext(ctx).Where("account_id = ?", accountID).Find(&dbStates).Error; err != nil {
+		return nil, fmt.Errorf("failed to list folder sync states: %w", err)
+	}
+
+	states := make([]*models.FolderSyncState, len(dbStates))
+	for i, ds := range dbStates {
+		states[i] = ds.toFolderSyncState()
+	}
+
+	return states, nil
 }
 
 // GetStats returns store statistics

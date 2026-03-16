@@ -10,6 +10,7 @@ import (
 
 	"webmail_engine/internal/models"
 	"webmail_engine/internal/pool"
+	"webmail_engine/internal/store"
 )
 
 // SyncManager manages background synchronization for all accounts
@@ -176,6 +177,7 @@ func (m *SyncManager) runSyncLoop(task *SyncTask) {
 	}
 }
 
+// executeSync performs synchronization for an account using UID tracking
 func (m *SyncManager) executeSync(accountID string) (int, error) {
 	// Get account with credentials
 	account, err := m.accountService.GetAccountWithCredentials(context.Background(), accountID)
@@ -223,48 +225,198 @@ func (m *SyncManager) executeSync(accountID string) (int, error) {
 			continue
 		}
 
-		// Select folder
-		_, err := client.SelectFolder(folder.Name)
+		// Sync folder with UID tracking (no need to explicitly select, GetFolderStatus uses EXAMINE)
+		count, err := m.syncFolder(accountID, client, folder.Name)
 		if err != nil {
-			log.Printf("Failed to select folder %s: %v", folder.Name, err)
+			log.Printf("Failed to sync folder %s: %v", folder.Name, err)
 			continue
 		}
-
-		// Get cached UID validity
-		// Compare with server UID validity
-		// If different, full sync needed
-		// If same, incremental sync from last UID
-
-		// Search for unseen messages
-		uids, err := client.Search("UNSEEN")
-		if err != nil {
-			log.Printf("Failed to search folder %s: %v", folder.Name, err)
-			continue
-		}
-
-		// Fetch new messages
-		for _, uid := range uids {
-			// Fetch message
-			envelopes, err := client.FetchMessages([]uint32{uid}, false)
-			if err != nil {
-				log.Printf("Failed to fetch message %d: %v", uid, err)
-				continue
-			}
-
-			if len(envelopes) > 0 {
-				totalSynced++
-				// Update cache
-				// Trigger webhook for new message
-			}
-		}
-
-		// Update folder info in cache
+		totalSynced += count
 	}
 
-	// Update account last sync time
-	// This would need a method to update the account
-
 	return totalSynced, nil
+}
+
+// syncFolder synchronizes a single folder using UID tracking with fallback strategies
+func (m *SyncManager) syncFolder(accountID string, client *pool.IMAPAdapter, folderName string) (int, error) {
+	ctx := context.Background()
+
+	// Get cached sync state
+	cachedState, err := m.accountService.GetFolderSyncState(ctx, accountID, folderName)
+	if err != nil && !store.IsNotFound(err) {
+		log.Printf("Failed to get folder sync state for %s/%s: %v", accountID, folderName, err)
+		// Continue without cached state
+		cachedState = nil
+	}
+
+	// Get current folder status (includes UID validity and message count)
+	status, err := client.GetFolderStatus(folderName)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get folder status: %w", err)
+	}
+
+	// Check UID validity - if changed, mailbox was reset and full sync needed
+	if cachedState != nil && status.UIDValidity != cachedState.UIDValidity {
+		log.Printf("UID validity changed for %s/%s (was %d, now %d), performing full sync",
+			accountID, folderName, cachedState.UIDValidity, status.UIDValidity)
+		return m.fullSyncFolder(accountID, client, folderName, status)
+	}
+
+	// Determine sync strategy based on cached state
+	if cachedState != nil && cachedState.IsInitialized && cachedState.LastSyncedUID > 0 {
+		// Incremental sync: fetch messages from lastSyncedUID+1 to current max UID
+		if status.UIDNext > cachedState.LastSyncedUID+1 {
+			return m.incrementalSync(accountID, client, folderName, cachedState, status)
+		}
+		// No new messages
+		return 0, nil
+	}
+
+	// Initial sync or no cached state - use date-based fallback
+	return m.initialSyncFolder(accountID, client, folderName, status)
+}
+
+// fullSyncFolder performs a full synchronization of a folder (after UID validity change)
+func (m *SyncManager) fullSyncFolder(accountID string, client *pool.IMAPAdapter, folderName string, status *pool.FolderStatus) (int, error) {
+	log.Printf("Performing full sync for %s/%s (UID range: 1:%d)", accountID, folderName, status.UIDNext-1)
+
+	// Search for ALL messages by UID range
+	if status.UIDNext <= 1 {
+		// Empty folder
+		return m.updateFolderSyncState(accountID, folderName, status, 0)
+	}
+
+	// Fetch all messages in batches
+	return m.syncUIDRange(accountID, client, folderName, 1, status.UIDNext-1, status)
+}
+
+// incrementalSync fetches only new messages since last sync
+func (m *SyncManager) incrementalSync(accountID string, client *pool.IMAPAdapter, folderName string, cachedState *models.FolderSyncState, status *pool.FolderStatus) (int, error) {
+	fromUID := cachedState.LastSyncedUID + 1
+	toUID := status.UIDNext - 1
+
+	if fromUID > toUID {
+		return 0, nil
+	}
+
+	log.Printf("Incremental sync for %s/%s (UID range: %d:%d)", accountID, folderName, fromUID, toUID)
+	return m.syncUIDRange(accountID, client, folderName, fromUID, toUID, status)
+}
+
+// initialSyncFolder performs initial synchronization using date-based search
+func (m *SyncManager) initialSyncFolder(accountID string, client *pool.IMAPAdapter, folderName string, status *pool.FolderStatus) (int, error) {
+	log.Printf("Initial sync for %s/%s", accountID, folderName)
+
+	// Use historical scope from sync settings
+	account, err := m.accountService.GetAccount(context.Background(), accountID)
+	if err != nil {
+		return 0, err
+	}
+
+	historicalDays := account.SyncSettings.HistoricalScope
+	if historicalDays <= 0 {
+		historicalDays = 30 // Default to 30 days
+	}
+
+	sinceDate := time.Now().AddDate(0, 0, -historicalDays)
+
+	// Search by date as fallback
+	uids, err := client.Search(fmt.Sprintf("SINCE %s", sinceDate.Format("02-Jan-2006")))
+	if err != nil {
+		log.Printf("Date-based search failed for %s/%s: %v, falling back to UNSEEN", accountID, folderName, err)
+		// Fallback to UNSEEN search
+		uids, err = client.Search("UNSEEN")
+		if err != nil {
+			return 0, fmt.Errorf("search failed: %w", err)
+		}
+	}
+
+	if len(uids) == 0 {
+		return m.updateFolderSyncState(accountID, folderName, status, 0)
+	}
+
+	// Fetch messages
+	count := 0
+	for _, uid := range uids {
+		envelopes, err := client.FetchMessages([]uint32{uid}, false)
+		if err != nil {
+			log.Printf("Failed to fetch message %d in %s/%s: %v", uid, accountID, folderName, err)
+			continue
+		}
+
+		if len(envelopes) > 0 {
+			count++
+			// Process message (update cache, trigger webhooks, etc.)
+			// This would integrate with the message service
+		}
+	}
+
+	return m.updateFolderSyncState(accountID, folderName, status, count)
+}
+
+// syncUIDRange fetches messages in a UID range and updates sync state
+func (m *SyncManager) syncUIDRange(accountID string, client *pool.IMAPAdapter, folderName string, fromUID, toUID uint32, status *pool.FolderStatus) (int, error) {
+	// Search for UIDs in range
+	searchCriteria := fmt.Sprintf("UID %d:%d", fromUID, toUID)
+	uids, err := client.Search(searchCriteria)
+	if err != nil {
+		return 0, fmt.Errorf("UID search failed: %w", err)
+	}
+
+	if len(uids) == 0 {
+		return m.updateFolderSyncState(accountID, folderName, status, 0)
+	}
+
+	// Fetch messages in batches (to avoid memory issues with large ranges)
+	batchSize := 50
+	count := 0
+
+	for i := 0; i < len(uids); i += batchSize {
+		end := i + batchSize
+		if end > len(uids) {
+			end = len(uids)
+		}
+
+		batch := uids[i:end]
+		envelopes, err := client.FetchMessages(batch, false)
+		if err != nil {
+			log.Printf("Failed to fetch batch %d-%d in %s/%s: %v", batch[0], batch[len(batch)-1], accountID, folderName, err)
+			continue
+		}
+
+		count += len(envelopes)
+
+		// Process each message
+		for _, env := range envelopes {
+			// Update cache
+			// Trigger webhook for new message
+			// This would integrate with the message service
+			_ = env
+		}
+	}
+
+	return m.updateFolderSyncState(accountID, folderName, status, count)
+}
+
+// updateFolderSyncState updates the folder sync state after successful sync
+func (m *SyncManager) updateFolderSyncState(accountID, folderName string, status *pool.FolderStatus, messagesSynced int) (int, error) {
+	state := &models.FolderSyncState{
+		AccountID:     accountID,
+		FolderName:    folderName,
+		UIDValidity:   status.UIDValidity,
+		LastSyncedUID: status.UIDNext - 1, // UIDNext is the next unused UID
+		LastSyncTime:  time.Now(),
+		MessageCount:  status.Messages,
+		IsInitialized: true,
+	}
+
+	ctx := context.Background()
+	if err := m.accountService.UpsertFolderSyncState(ctx, state); err != nil {
+		log.Printf("Failed to update folder sync state for %s/%s: %v", accountID, folderName, err)
+		// Don't fail the sync, just log the error
+	}
+
+	return messagesSynced, nil
 }
 
 // containsString checks if a string is in a slice

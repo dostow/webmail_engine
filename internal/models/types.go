@@ -203,6 +203,17 @@ type SyncSettings struct {
 	FairUsePolicy      *FairUsePolicy  `json:"fair_use_policy,omitempty"`
 }
 
+// FolderSyncState tracks synchronization state for a single folder
+type FolderSyncState struct {
+	AccountID      string    `json:"account_id"`
+	FolderName     string    `json:"folder_name"`
+	UIDValidity    uint32    `json:"uid_validity"` // IMAP UIDVALIDITY value
+	LastSyncedUID  uint32    `json:"last_synced_uid"` // Highest UID synced
+	LastSyncTime   time.Time `json:"last_sync_time"`
+	MessageCount   uint32    `json:"message_count"` // Total messages in folder
+	IsInitialized  bool      `json:"is_initialized"` // Whether initial sync completed
+}
+
 // FairUsePolicy represents rate limiting configuration
 type FairUsePolicy struct {
 	Enabled         bool              `json:"enabled"`

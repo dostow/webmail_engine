@@ -75,7 +75,13 @@ type AccountStore interface {
 	
 	// CreateAuditLog stores a new audit log entry
 	CreateAuditLog(ctx context.Context, log *models.AuditLog) error
-	
+
 	// ListAuditLogs retrieves audit logs with optional pagination
 	ListAuditLogs(ctx context.Context, offset, limit int) ([]*models.AuditLog, int, error)
+
+	// FolderSyncState operations for tracking sync progress per folder
+	GetFolderSyncState(ctx context.Context, accountID, folderName string) (*models.FolderSyncState, error)
+	UpsertFolderSyncState(ctx context.Context, state *models.FolderSyncState) error
+	DeleteFolderSyncState(ctx context.Context, accountID, folderName string) error
+	ListFolderSyncStates(ctx context.Context, accountID string) ([]*models.FolderSyncState, error)
 }

@@ -181,6 +181,29 @@ func (a *IMAPAdapter) SelectFolder(folder string) (*FolderInfo, error) {
 	return info, nil
 }
 
+// GetFolderStatus gets the current status of a folder including UID validity information
+func (a *IMAPAdapter) GetFolderStatus(folder string) (*FolderStatus, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Use Select command to get folder status
+	// Note: Select is used instead of Examine (not available in go-imap v2)
+	// This doesn't modify message flags when just reading status
+	selectedMbox, err := a.client.Select(folder, nil).Wait()
+	if err != nil {
+		return nil, fmt.Errorf("failed to select folder: %w", err)
+	}
+
+	status := &FolderStatus{
+		Messages:    uint32(selectedMbox.NumMessages),
+		Recent:      uint32(selectedMbox.NumRecent),
+		UIDNext:     uint32(selectedMbox.UIDNext),
+		UIDValidity: uint32(selectedMbox.UIDValidity),
+	}
+
+	return status, nil
+}
+
 // FetchMessages fetches message envelopes
 func (a *IMAPAdapter) FetchMessages(uids []uint32, includeBody bool) ([]MessageEnvelope, error) {
 	a.mu.Lock()

@@ -709,3 +709,23 @@ func generateAccountID(email string) string {
 func (s *AccountService) ListAuditLogs(ctx context.Context, offset, limit int) ([]*models.AuditLog, int, error) {
 	return s.store.ListAuditLogs(ctx, offset, limit)
 }
+
+// GetFolderSyncState retrieves sync state for a folder
+func (s *AccountService) GetFolderSyncState(ctx context.Context, accountID, folderName string) (*models.FolderSyncState, error) {
+	return s.store.GetFolderSyncState(ctx, accountID, folderName)
+}
+
+// UpsertFolderSyncState creates or updates folder sync state
+func (s *AccountService) UpsertFolderSyncState(ctx context.Context, state *models.FolderSyncState) error {
+	return s.store.UpsertFolderSyncState(ctx, state)
+}
+
+// DeleteFolderSyncState removes folder sync state
+func (s *AccountService) DeleteFolderSyncState(ctx context.Context, accountID, folderName string) error {
+	return s.store.DeleteFolderSyncState(ctx, accountID, folderName)
+}
+
+// ListFolderSyncStates lists all folder sync states for an account
+func (s *AccountService) ListFolderSyncStates(ctx context.Context, accountID string) ([]*models.FolderSyncState, error) {
+	return s.store.ListFolderSyncStates(ctx, accountID)
+}

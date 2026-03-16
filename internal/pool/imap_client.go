@@ -50,6 +50,14 @@ type FolderInfo struct {
 	HighestModSeq uint64
 }
 
+// FolderStatus represents the current status of a folder for sync purposes
+type FolderStatus struct {
+	Messages    uint32
+	UIDNext     uint32
+	UIDValidity uint32
+	Recent      uint32
+}
+
 // MessageEnvelope represents IMAP message envelope
 type MessageEnvelope struct {
 	UID         uint32
@@ -249,6 +257,21 @@ func (c *IMAPClient) SelectFolder(folder string) (*FolderInfo, error) {
 	c.highestModSeq = info.HighestModSeq
 
 	return &info, nil
+}
+
+// GetFolderStatus gets the current status of a folder including UID validity information
+func (c *IMAPClient) GetFolderStatus(folder string) (*FolderStatus, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Use EXAMINE to get folder status without modifying flags
+	response, err := c.sendCommand(fmt.Sprintf("EXAMINE \"%s\"", folder))
+	if err != nil {
+		return nil, err
+	}
+
+	status := parseFolderStatusResponse(response)
+	return &status, nil
 }
 
 // FetchMessages fetches message metadata
@@ -497,6 +520,36 @@ func parseSelectResponse(response string) FolderInfo {
 	}
 
 	return info
+}
+
+// parseFolderStatusResponse parses EXAMINE response to extract folder status
+func parseFolderStatusResponse(response string) FolderStatus {
+	var status FolderStatus
+
+	lines := strings.Split(response, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		if strings.Contains(line, "EXISTS") {
+			if n, err := extractNumber(line); err == nil {
+				status.Messages = uint32(n)
+			}
+		} else if strings.Contains(line, "RECENT") {
+			if n, err := extractNumber(line); err == nil {
+				status.Recent = uint32(n)
+			}
+		} else if strings.Contains(line, "UIDNEXT") {
+			if n, err := extractNumber(line); err == nil {
+				status.UIDNext = uint32(n)
+			}
+		} else if strings.Contains(line, "UIDVALIDITY") {
+			if n, err := extractNumber(line); err == nil {
+				status.UIDValidity = uint32(n)
+			}
+		}
+	}
+
+	return status
 }
 
 func parseFetchResponse(response string) ([]MessageEnvelope, error) {

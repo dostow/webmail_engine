@@ -198,3 +198,15 @@ export async function refreshServerCapabilities(accountId: string): Promise<{ ca
   });
   return handleResponse<{ capabilities: import('@/types').ServerCapabilities; refreshed: boolean }>(response);
 }
+
+export async function updateSyncSettings(
+  accountId: string,
+  syncSettings: import('@/types').SyncSettings
+): Promise<Account> {
+  const response = await fetch(`${getApiBaseUrl()}/v1/accounts/${accountId}/sync-settings`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(syncSettings),
+  });
+  return handleResponse<Account>(response);
+}

@@ -40,6 +40,7 @@ func (h *APIHandler) RegisterRoutes(router *gin.Engine) {
 	router.GET("/v1/accounts/:id", h.getAccount)
 	router.PUT("/v1/accounts/:id", h.updateAccount)
 	router.DELETE("/v1/accounts/:id", h.deleteAccount)
+	router.PATCH("/v1/accounts/:id/sync-settings", h.updateSyncSettings)
 	router.GET("/v1/accounts/:id/capabilities", h.getServerCapabilities)
 	router.POST("/v1/accounts/:id/capabilities/refresh", h.refreshServerCapabilities)
 
@@ -167,6 +168,40 @@ func (h *APIHandler) deleteAccount(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusNoContent, nil)
+}
+
+// updateSyncSettings updates sync settings for an account
+func (h *APIHandler) updateSyncSettings(c *gin.Context) {
+	accountID := c.Param("id")
+	if accountID == "" {
+		respondError(c, models.NewValidationError("account_id", "Account ID is required"))
+		return
+	}
+
+	var syncSettings models.SyncSettings
+	if err := c.ShouldBindJSON(&syncSettings); err != nil {
+		respondError(c, models.NewValidationError("body", "Invalid request body"))
+		return
+	}
+
+	// Validate sync interval (minimum 60 seconds)
+	if syncSettings.SyncInterval > 0 && syncSettings.SyncInterval < 60 {
+		respondError(c, models.NewValidationError("sync_interval", "Sync interval must be at least 60 seconds (1 minute)"))
+		return
+	}
+
+	account, err := h.accountService.UpdateAccount(c.Request.Context(), accountID, map[string]interface{}{
+		"sync_settings": syncSettings,
+	})
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	log.Printf("Updated sync settings for account %s: auto_sync=%v, interval=%ds",
+		accountID, syncSettings.AutoSync, syncSettings.SyncInterval)
+
+	c.JSON(http.StatusOK, account)
 }
 
 // getServerCapabilities returns the IMAP server capabilities for an account

@@ -437,8 +437,8 @@ func (m *SyncManager) StartSyncForNewAccount(accountID string, syncSettings mode
 	}
 
 	interval := time.Duration(syncSettings.SyncInterval) * time.Second
-	if interval < 30*time.Second {
-		interval = 300 * time.Second // Minimum 5 minutes
+	if interval < 60*time.Second {
+		interval = 60 * time.Second // Minimum 1 minute
 	}
 
 	if err := m.StartSync(accountID, interval); err != nil {

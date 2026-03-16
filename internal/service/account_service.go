@@ -458,6 +458,8 @@ func (s *AccountService) UpdateAccount(ctx context.Context, accountID string, up
 		return nil, fmt.Errorf("failed to get account: %w", err)
 	}
 
+	syncSettingsChanged := false
+
 	// Apply updates
 	for key, value := range updates {
 		switch key {
@@ -468,6 +470,7 @@ func (s *AccountService) UpdateAccount(ctx context.Context, accountID string, up
 		case "sync_settings":
 			if settings, ok := value.(models.SyncSettings); ok {
 				account.SyncSettings = settings
+				syncSettingsChanged = true
 			}
 		case "status":
 			if status, ok := value.(models.AccountStatus); ok {
@@ -481,6 +484,24 @@ func (s *AccountService) UpdateAccount(ctx context.Context, accountID string, up
 	// Update in store
 	if err := s.store.Update(ctx, account); err != nil {
 		return nil, fmt.Errorf("failed to update account in store: %w", err)
+	}
+
+	// Handle sync settings changes
+	if syncSettingsChanged && s.syncMgr != nil {
+		// Stop existing sync
+		s.syncMgr.StopSync(accountID)
+
+		// Start new sync if enabled
+		if account.SyncSettings.AutoSync {
+			interval := time.Duration(account.SyncSettings.SyncInterval) * time.Second
+			if interval < 60*time.Second {
+				interval = 60 * time.Second // Minimum 1 minute
+			}
+			s.syncMgr.StartSync(accountID, interval)
+			log.Printf("Restarted background sync for account %s (interval: %v)", accountID, interval)
+		} else {
+			log.Printf("Stopped background sync for account %s (auto_sync disabled)", accountID)
+		}
 	}
 
 	// Invalidate cache so next GetAccount fetches fresh data

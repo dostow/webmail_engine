@@ -2,7 +2,9 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -16,10 +18,11 @@ import (
 
 // IMAPAdapter wraps go-imap/v2 to match our interface
 type IMAPAdapter struct {
-	client      *imapclient.Client
-	conn        net.Conn
-	mu          sync.Mutex
-	selectedBox *imap.SelectData
+	client          *imapclient.Client
+	conn            net.Conn
+	mu              sync.Mutex
+	selectedBox     *imap.SelectData
+	invalidateFunc  func() // Callback to invalidate this session in the pool
 }
 
 // ConnectIMAPv2 establishes connection using go-imap/v2
@@ -108,6 +111,59 @@ func isAuthenticationError(err error) bool {
 	return false
 }
 
+// isConnectionError checks if an error is a network/connection error that indicates
+// the connection is dead and should be invalidated
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for net.OpError which wraps network errors
+	var netOpErr *net.OpError
+	if errors.As(err, &netOpErr) {
+		return true
+	}
+
+	// Check for net.Error (includes timeout and temporary errors)
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+
+	// Check for EOF (connection closed by remote)
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+
+	// Check for closed network connection errors
+	// These are wrapped in various ways, so we need string matching as fallback
+	errStr := err.Error()
+	if strings.Contains(errStr, "use of closed network connection") ||
+		strings.Contains(errStr, "closed network connection") {
+		return true
+	}
+
+	return false
+}
+
+// SetInvalidateFunc sets the callback function to invalidate this session
+func (a *IMAPAdapter) SetInvalidateFunc(fn func()) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.invalidateFunc = fn
+}
+
+// invalidate calls the invalidate callback if set
+func (a *IMAPAdapter) invalidate() {
+	a.mu.Lock()
+	fn := a.invalidateFunc
+	a.mu.Unlock()
+
+	if fn != nil {
+		fn()
+	}
+}
+
 // Close closes the IMAP connection
 func (a *IMAPAdapter) Close() error {
 	a.mu.Lock()
@@ -132,6 +188,11 @@ func (a *IMAPAdapter) ListFolders() ([]FolderInfo, error) {
 	// Use LIST command with Collect for simplicity
 	mailboxes, err := a.client.List("", "*", nil).Collect()
 	if err != nil {
+		if isConnectionError(err) {
+			a.mu.Unlock()
+			a.invalidate()
+			a.mu.Lock()
+		}
 		return nil, err
 	}
 
@@ -160,6 +221,11 @@ func (a *IMAPAdapter) SelectFolder(folder string) (*FolderInfo, error) {
 	// Use SELECT command
 	selectedMbox, err := a.client.Select(folder, nil).Wait()
 	if err != nil {
+		if isConnectionError(err) {
+			a.mu.Unlock()
+			a.invalidate()
+			a.mu.Lock()
+		}
 		return nil, fmt.Errorf("failed to select folder: %w", err)
 	}
 
@@ -191,6 +257,11 @@ func (a *IMAPAdapter) GetFolderStatus(folder string) (*FolderStatus, error) {
 	// This doesn't modify message flags when just reading status
 	selectedMbox, err := a.client.Select(folder, nil).Wait()
 	if err != nil {
+		if isConnectionError(err) {
+			a.mu.Unlock()
+			a.invalidate()
+			a.mu.Lock()
+		}
 		return nil, fmt.Errorf("failed to select folder: %w", err)
 	}
 
@@ -239,6 +310,11 @@ func (a *IMAPAdapter) FetchMessages(uids []uint32, includeBody bool) ([]MessageE
 	// Use FETCH with UID set
 	messages, err := a.client.Fetch(uidSet, fetchOptions).Collect()
 	if err != nil {
+		if isConnectionError(err) {
+			a.mu.Unlock()
+			a.invalidate()
+			a.mu.Lock()
+		}
 		return nil, err
 	}
 
@@ -300,6 +376,11 @@ func (a *IMAPAdapter) FetchMessageRaw(uid uint32) ([]byte, error) {
 
 	messages, err := a.client.Fetch(uidSet, fetchOptions).Collect()
 	if err != nil {
+		if isConnectionError(err) {
+			a.mu.Unlock()
+			a.invalidate()
+			a.mu.Lock()
+		}
 		return nil, err
 	}
 
@@ -333,6 +414,11 @@ func (a *IMAPAdapter) Search(criteria string) ([]uint32, error) {
 	// Use UID SEARCH
 	searchData, err := a.client.UIDSearch(&searchCriteria, nil).Wait()
 	if err != nil {
+		if isConnectionError(err) {
+			a.mu.Unlock()
+			a.invalidate()
+			a.mu.Lock()
+		}
 		return nil, err
 	}
 

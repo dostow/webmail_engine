@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/label';
 import { StatusBadge } from '@/components/ui/StatusBadge';
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/Alert';
 import type { Account } from '@/types';
 import * as api from '@/services/api';
 
@@ -34,7 +35,7 @@ export function AccountsView() {
       await api.deleteAccount(id);
       // Revalidation happens automatically if we used an action, but here we're using a direct API call.
       // Ideally we'd move this to an action too.
-      window.location.reload(); 
+      window.location.reload();
     } catch (err) {
       console.error('Failed to delete account', err);
     }
@@ -48,13 +49,41 @@ export function AccountsView() {
         return <StatusBadge status="error" label="Error" />;
       case 'syncing':
         return <StatusBadge status="warning" label="Syncing" />;
+      case 'disabled':
+        return <StatusBadge status="error" label="Disabled" />;
+      case 'auth_required':
+        return <StatusBadge status="warning" label="Auth Required" />;
+      case 'throttled':
+        return <StatusBadge status="warning" label="Throttled" />;
       default:
         return <StatusBadge status="info" label="Inactive" />;
     }
   };
 
+  // Get accounts needing attention
+  const accountsNeedingAttention = accounts.filter(
+    (acc) => ['disabled', 'auth_required', 'error', 'throttled'].includes(acc.status)
+  );
+
   return (
     <div className="flex flex-col gap-6">
+      {/* Accounts Needing Attention Alert */}
+      {accountsNeedingAttention.length > 0 && (
+        <Alert variant="warning" className="flex items-start gap-3">
+          <svg className="h-4 w-4 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <div>
+            <AlertTitle>
+              {accountsNeedingAttention.length} {accountsNeedingAttention.length === 1 ? 'account' : 'accounts'} need attention
+            </AlertTitle>
+            <AlertDescription>
+              {accountsNeedingAttention.map((acc) => acc.email).join(', ')}
+            </AlertDescription>
+          </div>
+        </Alert>
+      )}
+
       <Card>
         <div className="flex items-center justify-between border-b px-6 py-4">
           <h3 className="text-lg font-semibold">Add Email Account</h3>

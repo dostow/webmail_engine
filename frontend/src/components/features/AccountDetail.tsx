@@ -1,25 +1,38 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { toast } from 'sonner';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { StatusBadge } from '@/components/ui/StatusBadge';
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/Alert';
 import { ServerCapabilitiesDisplay } from './accounts/ServerCapabilitiesDisplay';
 import { SyncSettingsDialog } from './accounts/SyncSettingsDialog';
+import { UpdateCredentialsDialog } from './accounts/UpdateCredentialsDialog';
 import type { Account } from '@/types';
 import * as api from '@/services/api';
 
 export function AccountDetailView() {
   const { accountId } = useParams<{ accountId: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [account, setAccount] = useState<Account | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [syncSettingsOpen, setSyncSettingsOpen] = useState(false);
+  const [credentialsOpen, setCredentialsOpen] = useState(false);
+  const [showedDisabledToast, setShowedDisabledToast] = useState(false);
 
   useEffect(() => {
     if (!accountId) {
       navigate('/accounts');
       return;
+    }
+
+    // Check if redirected due to disabled account
+    const errorParam = searchParams.get('error');
+    if (errorParam === 'account_disabled' && !showedDisabledToast) {
+      setShowedDisabledToast(true);
+      toast.error('Account disabled - Please update your email credentials to re-enable');
     }
 
     const fetchAccount = async () => {
@@ -36,7 +49,7 @@ export function AccountDetailView() {
     };
 
     fetchAccount();
-  }, [accountId, navigate]);
+  }, [accountId, navigate, searchParams, showedDisabledToast]);
 
   const handleRefresh = async () => {
     if (!accountId) return;
@@ -61,6 +74,11 @@ export function AccountDetailView() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete account');
     }
+  };
+
+  const handleCredentialsUpdateSuccess = () => {
+    toast.success('Credentials updated successfully! Account re-enabled.');
+    handleRefresh();
   };
 
   const getStatusBadge = (status: string) => {
@@ -119,8 +137,82 @@ export function AccountDetailView() {
     );
   }
 
+  // Determine if account needs attention
+  const getAccountAlert = () => {
+    switch (account.status) {
+      case 'disabled':
+        return {
+          variant: 'destructive' as const,
+          title: 'Account Disabled',
+          description: 'This account has been disabled due to authentication failure. Please update your email credentials to re-enable.',
+          icon: (
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          ),
+        };
+      case 'auth_required':
+        return {
+          variant: 'warning' as const,
+          title: 'Authentication Required',
+          description: 'This account requires re-authentication. Please update your credentials.',
+          icon: (
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          ),
+        };
+      case 'error':
+        return {
+          variant: 'warning' as const,
+          title: 'Account Error',
+          description: 'This account is experiencing errors. Check your connection settings and try refreshing.',
+          icon: (
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          ),
+        };
+      case 'throttled':
+        return {
+          variant: 'warning' as const,
+          title: 'Account Throttled',
+          description: 'This account is temporarily throttled due to rate limiting. Please wait before making more requests.',
+          icon: (
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          ),
+        };
+      default:
+        return null;
+    }
+  };
+
+  const accountAlert = getAccountAlert();
+
   return (
     <div className="flex flex-col gap-6">
+      {/* Account Status Alert */}
+      {accountAlert && (
+        <Alert variant={accountAlert.variant} className="flex items-start gap-3">
+          {accountAlert.icon}
+          <div className="flex-1">
+            <AlertTitle>{accountAlert.title}</AlertTitle>
+            <AlertDescription>{accountAlert.description}</AlertDescription>
+          </div>
+          {account.status === 'disabled' || account.status === 'auth_required' ? (
+            <Button
+              size="sm"
+              onClick={() => setCredentialsOpen(true)}
+              className="shrink-0"
+            >
+              Update Credentials
+            </Button>
+          ) : null}
+        </Alert>
+      )}
+
       {/* Header Card */}
       <Card>
         <div className="flex items-center justify-between border-b px-6 py-4">
@@ -138,6 +230,11 @@ export function AccountDetailView() {
             <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
               Refresh
             </Button>
+            {(account.status === 'disabled' || account.status === 'auth_required') && (
+              <Button variant="default" size="sm" onClick={() => setCredentialsOpen(true)}>
+                Update Credentials
+              </Button>
+            )}
           </div>
         </div>
 
@@ -194,11 +291,10 @@ export function AccountDetailView() {
                 <div className="flex justify-between">
                   <dt className="text-muted-foreground">Auto Sync:</dt>
                   <dd>
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                      account.sync_settings.auto_sync
-                        ? 'bg-green-100 text-green-800'
-                        : 'bg-gray-100 text-gray-800'
-                    }`}>
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${account.sync_settings.auto_sync
+                      ? 'bg-green-100 text-green-800'
+                      : 'bg-gray-100 text-gray-800'
+                      }`}>
                       {account.sync_settings.auto_sync ? 'Enabled' : 'Disabled'}
                     </span>
                   </dd>
@@ -297,6 +393,14 @@ export function AccountDetailView() {
         open={syncSettingsOpen}
         onOpenChange={setSyncSettingsOpen}
         onSuccess={handleRefresh}
+      />
+
+      {/* Update Credentials Dialog */}
+      <UpdateCredentialsDialog
+        account={account}
+        open={credentialsOpen}
+        onOpenChange={setCredentialsOpen}
+        onSuccess={handleCredentialsUpdateSuccess}
       />
     </div>
   );

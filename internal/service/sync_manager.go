@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"webmail_engine/internal/envelopequeue"
 	"webmail_engine/internal/models"
 	"webmail_engine/internal/pool"
 	"webmail_engine/internal/store"
@@ -22,6 +23,7 @@ type SyncManager struct {
 	syncTasks      map[string]*SyncTask
 	globalCtx      context.Context
 	globalCancel   context.CancelFunc
+	queue          envelopequeue.EnvelopeQueue
 }
 
 // SyncTask represents a background sync task for an account
@@ -42,6 +44,7 @@ func NewSyncManager(
 	msgService *MessageService,
 	accService *AccountService,
 	sessions *pool.IMAPSessionPool,
+	queue envelopequeue.EnvelopeQueue,
 ) *SyncManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -52,7 +55,19 @@ func NewSyncManager(
 		syncTasks:      make(map[string]*SyncTask),
 		globalCtx:      ctx,
 		globalCancel:   cancel,
+		queue:          queue,
 	}
+}
+
+// NewSyncManagerForWorker creates a sync manager for standalone worker use
+// Uses nil for messageService since workers only enqueue envelopes
+func NewSyncManagerForWorker(
+	msgService *MessageService,
+	accService *AccountService,
+	sessions *pool.IMAPSessionPool,
+	queue envelopequeue.EnvelopeQueue,
+) *SyncManager {
+	return NewSyncManager(msgService, accService, sessions, queue)
 }
 
 // StartSync starts background sync for an account
@@ -198,8 +213,14 @@ func (m *SyncManager) executeSync(accountID string) (int, error) {
 	if err != nil {
 		// Check for authentication errors
 		if errors.Is(err, models.ErrMailServerAuthFailed) {
-			log.Printf("[Sync] Auth failed for %s, stopping sync task", accountID)
+			log.Printf("[Sync] Auth failed for %s, disabling account", accountID)
 			m.accountService.LogAuditEntry(context.Background(), accountID, account.Email, "auth_failure", "Sync failed: invalid credentials", "127.0.0.1")
+
+			// Disable the account to prevent further attempts and notify UI
+			if err := m.accountService.DisableAccount(context.Background(), accountID, "IMAP authentication failed during sync"); err != nil {
+				log.Printf("[Sync] Failed to disable account %s: %v", accountID, err)
+			}
+
 			go m.StopSync(accountID)
 			return 0, fmt.Errorf("authentication failed: %w", err)
 		}
@@ -335,8 +356,9 @@ func (m *SyncManager) initialSyncFolder(accountID string, client *pool.IMAPAdapt
 		return m.updateFolderSyncState(accountID, folderName, status, 0)
 	}
 
-	// Fetch messages
+	// Fetch messages and enqueue for processing
 	count := 0
+	enqueued := 0
 	for _, uid := range uids {
 		envelopes, err := client.FetchMessages([]uint32{uid}, false)
 		if err != nil {
@@ -346,15 +368,24 @@ func (m *SyncManager) initialSyncFolder(accountID string, client *pool.IMAPAdapt
 
 		if len(envelopes) > 0 {
 			count++
-			// Process message (update cache, trigger webhooks, etc.)
-			// This would integrate with the message service
+			// Enqueue for async processing
+			for _, env := range envelopes {
+				if err := m.enqueueEnvelope(accountID, folderName, &env); err != nil {
+					log.Printf("Failed to enqueue envelope %s in %s/%s: %v", env.MessageID, accountID, folderName, err)
+					continue
+				}
+				enqueued++
+			}
 		}
 	}
+
+	log.Printf("Initial sync completed for %s/%s: %d messages, %d enqueued for processing",
+		accountID, folderName, count, enqueued)
 
 	return m.updateFolderSyncState(accountID, folderName, status, count)
 }
 
-// syncUIDRange fetches messages in a UID range and updates sync state
+// syncUIDRange fetches messages in a UID range and enqueues envelopes for processing
 func (m *SyncManager) syncUIDRange(accountID string, client *pool.IMAPAdapter, folderName string, fromUID, toUID uint32, status *pool.FolderStatus) (int, error) {
 	// Search for UIDs in range
 	searchCriteria := fmt.Sprintf("UID %d:%d", fromUID, toUID)
@@ -370,6 +401,7 @@ func (m *SyncManager) syncUIDRange(accountID string, client *pool.IMAPAdapter, f
 	// Fetch messages in batches (to avoid memory issues with large ranges)
 	batchSize := 50
 	count := 0
+	enqueued := 0
 
 	for i := 0; i < len(uids); i += batchSize {
 		end := i + batchSize
@@ -386,16 +418,92 @@ func (m *SyncManager) syncUIDRange(accountID string, client *pool.IMAPAdapter, f
 
 		count += len(envelopes)
 
-		// Process each message
+		// Enqueue each envelope for async processing
 		for _, env := range envelopes {
-			// Update cache
-			// Trigger webhook for new message
-			// This would integrate with the message service
-			_ = env
+			if err := m.enqueueEnvelope(accountID, folderName, &env); err != nil {
+				log.Printf("Failed to enqueue envelope %s in %s/%s: %v", env.MessageID, accountID, folderName, err)
+				continue
+			}
+			enqueued++
 		}
 	}
 
+	log.Printf("Enqueued %d/%d envelopes for processing from %s/%s (UID range: %d:%d)",
+		enqueued, count, accountID, folderName, fromUID, toUID)
+
 	return m.updateFolderSyncState(accountID, folderName, status, count)
+}
+
+// enqueueEnvelope creates a queue item from an envelope and adds it to the processing queue
+func (m *SyncManager) enqueueEnvelope(accountID, folderName string, env *pool.MessageEnvelope) error {
+	if m.queue == nil {
+		// Queue not configured, skip enqueueing
+		return nil
+	}
+
+	// Determine priority based on flags and folder
+	priority := m.determineEnvelopePriority(folderName, env)
+
+	// Create queue item
+	queueItem := &models.EnvelopeQueueItem{
+		ID:         generateEnvelopeID(accountID, folderName, env.UID),
+		AccountID:  accountID,
+		FolderName: folderName,
+		UID:        env.UID,
+		MessageID:  env.MessageID,
+		From:       env.From,
+		To:         env.To,
+		Subject:    env.Subject,
+		Date:       env.Date,
+		Flags:      env.Flags,
+		Size:       env.Size,
+		Priority:   priority,
+		Status:     models.EnvelopeStatusPending,
+		MaxRetries: 3,
+	}
+
+	ctx := context.Background()
+	opts := &envelopequeue.EnqueueOptions{
+		Priority:   priority,
+		MaxRetries: 3,
+	}
+
+	return m.queue.Enqueue(ctx, queueItem, opts)
+}
+
+// determineEnvelopePriority determines processing priority based on envelope characteristics
+func (m *SyncManager) determineEnvelopePriority(folderName string, env *pool.MessageEnvelope) models.EnvelopeProcessingPriority {
+	// High priority: UNSEEN messages in INBOX
+	isInbox := folderName == "INBOX" || folderName == "\\Inbox"
+	isUnseen := true // Assume unseen unless \\Seen flag present
+	isFlagged := false
+
+	for _, flag := range env.Flags {
+		if flag == "\\Seen" {
+			isUnseen = false
+		}
+		if flag == "\\Flagged" {
+			isFlagged = true
+		}
+	}
+
+	// High priority conditions
+	if isInbox && (isUnseen || isFlagged) {
+		return models.PriorityHigh
+	}
+
+	// Normal priority: INBOX messages
+	if isInbox {
+		return models.PriorityNormal
+	}
+
+	// Low priority: Archive, Sent, or other folders
+	return models.PriorityLow
+}
+
+// generateEnvelopeID creates a unique ID for an envelope
+func generateEnvelopeID(accountID, folderName string, uid uint32) string {
+	return fmt.Sprintf("%s:%s:%d", accountID, folderName, uid)
 }
 
 // updateFolderSyncState updates the folder sync state after successful sync

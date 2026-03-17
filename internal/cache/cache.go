@@ -390,11 +390,17 @@ func (c *Cache) GetStats(ctx context.Context) (*CacheStats, error) {
 
 // Ping checks if cache is available
 func (c *Cache) Ping(ctx context.Context) error {
+	if c == nil || c.client == nil {
+		return nil
+	}
 	return c.client.Ping(ctx)
 }
 
 // Close closes the cache connection
 func (c *Cache) Close() error {
+	if c == nil || c.client == nil {
+		return nil
+	}
 	return c.client.Close()
 }
 

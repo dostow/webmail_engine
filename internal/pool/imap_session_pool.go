@@ -2,39 +2,48 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
 	"time"
+	"webmail_engine/internal/models"
 )
 
 // IMAPSessionPool manages authenticated IMAP connections per account.
-// It keeps connections alive to avoid reconnecting and authenticating 
+// It keeps connections alive to avoid reconnecting and authenticating
 // for every single API request, which causes IP bans.
 type IMAPSessionPool struct {
-	mu            sync.Mutex
-	sessions      map[string]*pooledSession
-	config        SessionPoolConfig
-	reuseCount    int64
-	totalConnects int64
-	lastFailure   map[string]time.Time
+	mu             sync.Mutex
+	sessions       map[string]*pooledSession
+	config         SessionPoolConfig
+	reuseCount     int64
+	totalConnects  int64
+	lastFailure    map[string]time.Time
+	accountService AccountServiceInterface
+}
+
+// AccountServiceInterface defines the interface for account service operations
+// This is used to avoid circular dependencies
+type AccountServiceInterface interface {
+	DisableAccount(ctx context.Context, accountID string, reason string) error
 }
 
 type pooledSession struct {
-	adapter    *IMAPAdapter
-	config     IMAPConfig
-	mu         sync.Mutex
-	inUse      int       // reference count
-	lastUsed   time.Time
-	createdAt  time.Time
-	healthy    bool
+	adapter   *IMAPAdapter
+	config    IMAPConfig
+	mu        sync.Mutex
+	inUse     int // reference count
+	lastUsed  time.Time
+	createdAt time.Time
+	healthy   bool
 }
 
 // SessionPoolConfig configures the IMAP session pool
 type SessionPoolConfig struct {
-	MaxIdleTimeout  time.Duration // Time before closing an idle connection
-	KeepAliveEvery  time.Duration // How often to send NOOP
-	MaxSessionAge   time.Duration // Maximum absolute age of a connection
+	MaxIdleTimeout time.Duration // Time before closing an idle connection
+	KeepAliveEvery time.Duration // How often to send NOOP
+	MaxSessionAge  time.Duration // Maximum absolute age of a connection
 }
 
 // SessionPoolStats contains statistics about the session pool
@@ -54,19 +63,28 @@ func DefaultSessionPoolConfig() SessionPoolConfig {
 }
 
 // NewIMAPSessionPool creates a new session pool
-func NewIMAPSessionPool(config SessionPoolConfig) *IMAPSessionPool {
+func NewIMAPSessionPool(config SessionPoolConfig, accountService AccountServiceInterface) *IMAPSessionPool {
 	return &IMAPSessionPool{
-		sessions:    make(map[string]*pooledSession),
-		lastFailure: make(map[string]time.Time),
-		config:      config,
+		sessions:       make(map[string]*pooledSession),
+		lastFailure:    make(map[string]time.Time),
+		config:         config,
+		accountService: accountService,
 	}
+}
+
+// SetAccountService sets the account service for the session pool
+// This is used to resolve circular dependencies during initialization
+func (p *IMAPSessionPool) SetAccountService(accountService AccountServiceInterface) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.accountService = accountService
 }
 
 // Acquire gets an authenticated IMAP client for the given account.
 // It returns a release function that MUST be called when done.
 func (p *IMAPSessionPool) Acquire(ctx context.Context, accountID string, config IMAPConfig) (*IMAPAdapter, func(), error) {
 	p.mu.Lock()
-	
+
 	// Check for recent failures to avoid hammer-banning the IP
 	if lastFail, ok := p.lastFailure[accountID]; ok {
 		if time.Since(lastFail) < 10*time.Second {
@@ -76,64 +94,95 @@ func (p *IMAPSessionPool) Acquire(ctx context.Context, accountID string, config 
 	}
 
 	session, exists := p.sessions[accountID]
-	
+
 	if exists && session.healthy {
 		// Session exists and is healthy
 		session.mu.Lock()
-		
+
 		if session.inUse == 0 {
 			// Fast path: session is idle, reuse it immediately
 			session.inUse = 1
 			session.lastUsed = time.Now()
-			
+
 			p.reuseCount++
-			
+
 			session.mu.Unlock()
 			p.mu.Unlock()
-			
+
 			// We return a release function for this adapter
 			release := func() {
 				p.Release(accountID)
 			}
 			return session.adapter, release, nil
 		}
-		
+
 		// The connection is currently in use by another goroutine.
 		// Since IMAP connections generally process one command at a time,
 		// we must create a temporary unpooled connection to avoid blocking it.
 		// (Alternatively, we could wait, but creating a temporary burst connection is safer).
 		session.mu.Unlock()
 		p.mu.Unlock()
-		
+
 		log.Printf("[IMAP Pool] Burst connection created for %s (primary session in use)", accountID)
 		p.totalConnects++
 		tempAdapter, err := ConnectIMAPv2(ctx, config)
 		if err != nil {
 			p.mu.Lock()
 			p.lastFailure[accountID] = time.Now()
+
+			// Check if this is an authentication failure
+			if errors.Is(err, models.ErrMailServerAuthFailed) {
+				log.Printf("[IMAP Pool] Auth failure detected for %s (burst), disabling account", accountID)
+				if p.accountService != nil {
+					// Call synchronously to ensure account is disabled before response
+					if err := p.accountService.DisableAccount(context.Background(), accountID, "IMAP authentication failed"); err != nil {
+						log.Printf("[IMAP Pool] Failed to disable account %s (burst): %v", accountID, err)
+					} else {
+						log.Printf("[IMAP Pool] Account %s successfully disabled (burst)", accountID)
+					}
+				}
+			}
+
 			p.mu.Unlock()
 			return nil, nil, err
 		}
-		
+
 		release := func() {
 			tempAdapter.Close()
 		}
 		return tempAdapter, release, nil
 	}
-	
+
 	p.mu.Unlock()
 
 	// If we got here, we need to create a new pooled session
 	log.Printf("[IMAP Pool] Creating new primary session for %s", accountID)
-	
+
 	p.mu.Lock()
 	p.totalConnects++
 	p.mu.Unlock()
-	
+
 	adapter, err := ConnectIMAPv2(ctx, config)
 	if err != nil {
 		p.mu.Lock()
 		p.lastFailure[accountID] = time.Now()
+
+		// Check if this is an authentication failure
+		if errors.Is(err, models.ErrMailServerAuthFailed) {
+			// Disable the account to prevent further attempts and notify UI
+			log.Printf("[IMAP Pool] Auth failure detected for %s, disabling account", accountID)
+			if p.accountService != nil {
+				// Call synchronously to ensure account is disabled before response
+				if err := p.accountService.DisableAccount(context.Background(), accountID, "IMAP authentication failed"); err != nil {
+					log.Printf("[IMAP Pool] Failed to disable account %s: %v", accountID, err)
+				} else {
+					log.Printf("[IMAP Pool] Account %s successfully disabled", accountID)
+				}
+			} else {
+				log.Printf("[IMAP Pool] Account service not available, cannot disable account %s", accountID)
+			}
+		}
+
 		p.mu.Unlock()
 		return nil, nil, err
 	}
@@ -152,6 +201,12 @@ func (p *IMAPSessionPool) Acquire(ctx context.Context, accountID string, config 
 	}
 
 	now := time.Now()
+
+	// Set up invalidate callback so the adapter can notify the pool when connection dies
+	adapter.SetInvalidateFunc(func() {
+		p.Invalidate(accountID)
+	})
+
 	newSession := &pooledSession{
 		adapter:   adapter,
 		config:    config,
@@ -160,18 +215,18 @@ func (p *IMAPSessionPool) Acquire(ctx context.Context, accountID string, config 
 		createdAt: now,
 		healthy:   true,
 	}
-	
+
 	// Close any old unhealthy session we're replacing
 	if oldSession, ok := p.sessions[accountID]; ok {
 		go oldSession.adapter.Close()
 	}
-	
+
 	p.sessions[accountID] = newSession
 
 	release := func() {
 		p.Release(accountID)
 	}
-	
+
 	return adapter, release, nil
 }
 
@@ -187,7 +242,7 @@ func (p *IMAPSessionPool) Release(accountID string) {
 
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	
+
 	session.inUse = 0
 	session.lastUsed = time.Now()
 }
@@ -221,7 +276,7 @@ func (p *IMAPSessionPool) Invalidate(accountID string) {
 func (p *IMAPSessionPool) StartMaintenance(ctx context.Context) {
 	keepAliveTicker := time.NewTicker(p.config.KeepAliveEvery)
 	cleanupTicker := time.NewTicker(1 * time.Minute)
-	
+
 	defer keepAliveTicker.Stop()
 	defer cleanupTicker.Stop()
 
@@ -236,10 +291,10 @@ func (p *IMAPSessionPool) StartMaintenance(ctx context.Context) {
 			p.sessions = make(map[string]*pooledSession)
 			p.mu.Unlock()
 			return
-			
+
 		case <-keepAliveTicker.C:
 			p.performKeepAlive()
-			
+
 		case <-cleanupTicker.C:
 			p.performCleanup()
 		}
@@ -254,7 +309,7 @@ func (p *IMAPSessionPool) performKeepAlive() {
 		session   *pooledSession
 	}
 	var targets []pingTarget
-	
+
 	for id, session := range p.sessions {
 		session.mu.Lock()
 		if session.healthy && session.inUse == 0 {
@@ -273,7 +328,7 @@ func (p *IMAPSessionPool) performKeepAlive() {
 			log.Printf("[IMAP Pool] KeepAlive failed for %s: %v", target.accountID, err)
 			target.session.healthy = false
 		}
-		
+
 		// Release the session
 		target.session.mu.Lock()
 		target.session.inUse = 0
@@ -284,24 +339,24 @@ func (p *IMAPSessionPool) performKeepAlive() {
 func (p *IMAPSessionPool) performCleanup() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	now := time.Now()
-	
+
 	for id, session := range p.sessions {
 		session.mu.Lock()
-		
+
 		// Unhealthy sessions are dumped
 		if !session.healthy {
 			session.mu.Unlock()
 			go p.Invalidate(id)
 			continue
 		}
-		
+
 		// We only cleanup idle sessions
 		if session.inUse == 0 {
 			age := now.Sub(session.createdAt)
 			idleTime := now.Sub(session.lastUsed)
-			
+
 			if idleTime > p.config.MaxIdleTimeout || age > p.config.MaxSessionAge {
 				log.Printf("[IMAP Pool] Expiring session for %s (idle: %v, age: %v)", id, idleTime, age)
 				session.healthy = false
@@ -310,7 +365,7 @@ func (p *IMAPSessionPool) performCleanup() {
 				continue
 			}
 		}
-		
+
 		session.mu.Unlock()
 	}
 }

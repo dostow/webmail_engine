@@ -19,6 +19,42 @@ type APIHandler struct {
 	sendService    *service.SendService
 }
 
+// accountStatusMiddleware checks if an account is disabled and returns an error if so
+// This middleware should be used for routes that access account resources
+func (h *APIHandler) accountStatusMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		accountID := c.Param("id")
+		if accountID == "" {
+			c.Next()
+			return
+		}
+
+		// Get account to check status
+		account, err := h.accountService.GetAccount(c.Request.Context(), accountID)
+		if err != nil {
+			respondError(c, err)
+			c.Abort()
+			return
+		}
+
+		// Check if account is disabled
+		if account.Status == models.AccountStatusDisabled {
+			respondError(c, models.NewAuthError("Account is disabled due to authentication failure. Please update your email credentials."))
+			c.Abort()
+			return
+		}
+
+		// Check if account requires authentication
+		if account.Status == models.AccountStatusAuthRequired {
+			respondError(c, models.NewAuthError("Account requires re-authentication. Please update your credentials."))
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
 // NewAPIHandler creates a new API handler
 func NewAPIHandler(
 	accountService *service.AccountService,
@@ -44,16 +80,18 @@ func (h *APIHandler) RegisterRoutes(router *gin.Engine) {
 	router.GET("/v1/accounts/:id/capabilities", h.getServerCapabilities)
 	router.POST("/v1/accounts/:id/capabilities/refresh", h.refreshServerCapabilities)
 
-	// Message routes
-	router.GET("/v1/accounts/:id/messages", h.getMessages)
-	router.GET("/v1/accounts/:id/messages/:uid", h.getMessage)
-	router.GET("/v1/accounts/:id/search", h.searchMessages)
-	router.POST("/v1/accounts/:id/search", h.searchMessages)
+	// Message routes (with account status middleware)
+	accountRoutes := router.Group("/v1/accounts/:id")
+	accountRoutes.Use(h.accountStatusMiddleware())
+	{
+		accountRoutes.GET("/messages", h.getMessages)
+		accountRoutes.GET("/messages/:uid", h.getMessage)
+		accountRoutes.GET("/search", h.searchMessages)
+		accountRoutes.POST("/search", h.searchMessages)
+		accountRoutes.POST("/send", h.sendMessage)
+	}
 
-	// Send routes
-	router.POST("/v1/accounts/:id/send", h.sendMessage)
-
-	// Health routes
+	// Health routes (no middleware - should work even for disabled accounts)
 	router.GET("/v1/health", h.getSystemHealth)
 	router.GET("/v1/health/accounts/:id", h.getAccountStatus)
 	router.GET("/v1/accounts/:id/stats", h.getAccountStats)
@@ -380,7 +418,7 @@ func (h *APIHandler) getSystemHealth(c *gin.Context) {
 				Status: "healthy",
 			},
 			"pool": {
-				Status: "healthy",
+				Status:  "healthy",
 				Details: poolStats,
 			},
 		},
@@ -445,7 +483,6 @@ func (h *APIHandler) getPoolStats(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
-
 // Helper functions
 
 func respondError(c *gin.Context, err error) {
@@ -486,6 +523,9 @@ func respondError(c *gin.Context, err error) {
 		errStr := err.Error()
 		if strings.Contains(errStr, "already exists") || strings.Contains(errStr, "duplicate") {
 			apiErr = models.NewConflictError("Resource", errStr)
+		} else if strings.Contains(errStr, "authentication") || strings.Contains(errStr, "credentials") || strings.Contains(errStr, "disabled") {
+			// Authentication-related errors
+			apiErr = models.NewAuthError(errStr)
 		} else if strings.Contains(errStr, "timeout") {
 			apiErr = models.NewTimeoutError("Operation", 30)
 		} else if strings.Contains(errStr, "connection") || strings.Contains(errStr, "unavailable") {

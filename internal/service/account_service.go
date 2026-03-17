@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -66,6 +67,13 @@ func (s *AccountService) SetSyncManager(syncMgr *SyncManager) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.syncMgr = syncMgr
+}
+
+// SetStore sets the account store (for worker use)
+func (s *AccountService) SetStore(str store.AccountStore) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.store = str
 }
 
 // AddAccount adds a new email account (or updates if account already exists)
@@ -220,6 +228,14 @@ func (s *AccountService) updateAccountConfig(ctx context.Context, acc *models.Ac
 	acc.ProxyConfig = req.ProxyConfig
 	acc.UpdatedAt = time.Now()
 
+	// Re-enable account if it was disabled (credentials are now verified)
+	if acc.Status == models.AccountStatusDisabled || acc.Status == models.AccountStatusAuthRequired {
+		log.Printf("Re-enabling account %s (was %s)", acc.ID, acc.Status)
+		acc.Status = models.AccountStatusActive
+		now := time.Now()
+		acc.LastSyncAt = &now
+	}
+
 	// Update in persistent store
 	if err := s.store.Update(ctx, acc); err != nil {
 		return nil, fmt.Errorf("failed to update account in store: %w", err)
@@ -237,12 +253,12 @@ func (s *AccountService) updateAccountConfig(ctx context.Context, acc *models.Ac
 		s.syncMgr.StartSyncForNewAccount(acc.ID, req.SyncSettings)
 	}
 
+	// Invalidate cache to ensure UI gets updated status
+	s.cache.InvalidateAccount(ctx, acc.ID)
+
 	// Don't cache the full account with encrypted password
 	// The cache is only for stripped accounts used in API responses
-
-	acc.Status = models.AccountStatusActive
-	now := time.Now()
-	acc.LastSyncAt = &now
+	// The first API call to GetAccount will populate the cache
 
 	return &models.AddAccountResponse{
 		AccountID:             acc.ID,
@@ -337,6 +353,11 @@ func (s *AccountService) DetectServerCapabilities(ctx context.Context, accountID
 		return nil, fmt.Errorf("failed to get account: %w", err)
 	}
 
+	// Check if account is disabled
+	if account.Status == models.AccountStatusDisabled {
+		return nil, models.NewAuthError("Account is disabled due to authentication failure. Please update your email credentials.")
+	}
+
 	// Create IMAP config
 	imapConfig := pool.IMAPConfig{
 		Host:       account.IMAPConfig.Host,
@@ -352,6 +373,17 @@ func (s *AccountService) DetectServerCapabilities(ctx context.Context, accountID
 
 	client, release, err := s.sessions.Acquire(connectCtx, accountID, imapConfig)
 	if err != nil {
+		// Check for authentication errors and return structured response
+		if errors.Is(err, models.ErrMailServerAuthFailed) {
+			log.Printf("[Capabilities] Auth failed for %s, disabling account", accountID)
+
+			// Disable the account
+			if err := s.DisableAccount(ctx, accountID, "IMAP authentication failed during capability detection"); err != nil {
+				log.Printf("[Capabilities] Failed to disable account %s: %v", accountID, err)
+			}
+
+			return nil, models.NewAuthError("Authentication failed. Account has been disabled. Please update your email credentials.")
+		}
 		return nil, fmt.Errorf("failed to connect to IMAP server: %w", err)
 	}
 	defer release()
@@ -588,11 +620,81 @@ func (s *AccountService) GetAccountStatus(ctx context.Context, accountID string)
 		},
 	}
 
+	// Add recommendations for disabled accounts
+	if account.Status == models.AccountStatusDisabled {
+		status.Health.Recommendations = append(status.Health.Recommendations,
+			"Account disabled due to authentication failure. Please update your email credentials.")
+		status.ConnectionState.ErrorCount = 1
+		errMsg := "Authentication failed - account disabled"
+		status.ConnectionState.LastError = &errMsg
+	}
+
 	if account.LastSyncAt != nil {
 		status.LastSuccessful = account.LastSyncAt
 	}
 
 	return status, nil
+}
+
+// DisableAccount disables an account due to authentication failure
+func (s *AccountService) DisableAccount(ctx context.Context, accountID string, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Get account from store
+	account, err := s.store.GetByID(ctx, accountID)
+	if err != nil {
+		if store.IsNotFound(err) {
+			return models.ErrAccountNotFound
+		}
+		return fmt.Errorf("failed to get account: %w", err)
+	}
+
+	// Don't disable if already disabled
+	if account.Status == models.AccountStatusDisabled {
+		return nil
+	}
+
+	// Update account status
+	account.Status = models.AccountStatusDisabled
+	account.UpdatedAt = time.Now()
+
+	// Store the error reason in a field that can be retrieved later
+	// For now, we'll log it and it will be reflected in status checks
+	log.Printf("[Account Disabled] Account %s (%s) disabled due to: %s",
+		accountID, account.Email, reason)
+
+	// Update in persistent store
+	if err := s.store.Update(ctx, account); err != nil {
+		return fmt.Errorf("failed to update account status: %w", err)
+	}
+
+	// Log audit entry
+	s.LogAuditEntry(ctx, accountID, account.Email, "account_disabled",
+		fmt.Sprintf("Account disabled due to authentication failure: %s", reason), "system")
+
+	// Close any active connections
+	s.pool.CloseAccount(accountID)
+
+	// Stop any running sync tasks
+	if s.syncMgr != nil {
+		s.syncMgr.StopSync(accountID)
+	}
+
+	// Invalidate cache
+	s.cache.InvalidateAccount(ctx, accountID)
+
+	log.Printf("Account %s has been disabled due to authentication failure", accountID)
+	return nil
+}
+
+// IsAccountDisabled checks if an account is disabled
+func (s *AccountService) IsAccountDisabled(ctx context.Context, accountID string) (bool, error) {
+	account, err := s.store.GetByID(ctx, accountID)
+	if err != nil {
+		return false, err
+	}
+	return account.Status == models.AccountStatusDisabled, nil
 }
 
 // verifyConnectionWithRawPassword tests the IMAP/SMTP connection with raw password

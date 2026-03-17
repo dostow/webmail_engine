@@ -43,3 +43,6 @@ tmp/
 
 # Bra live reload config
 .bra.toml
+config.json.*
+*.rdb
+config.json

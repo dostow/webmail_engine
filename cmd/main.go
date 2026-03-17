@@ -11,7 +11,6 @@ import (
 	"path"
 	"strings"
 	"syscall"
-	"webmail_engine"
 
 	"webmail_engine/internal/api"
 	"webmail_engine/internal/cache"
@@ -53,7 +52,7 @@ func main() {
 	}
 
 	// Initialize components
-	log.Println("Initializing webmail engine...")
+	log.Println("Initializing webmail engine (API server)...")
 
 	// Initialize cache backend
 	var cacheClient cache.RedisClient
@@ -82,12 +81,15 @@ func main() {
 
 	memCache := cache.NewCache(cacheClient)
 
-	// Initialize connection pool
+	// Initialize connection pool for IMAP/SMTP
 	connPool := pool.NewConnectionPool(pool.PoolConfig{
 		MaxConnections: cfg.Pool.MaxConnections,
 		IdleTimeout:    cfg.Pool.IdleTimeout,
 		DialTimeout:    cfg.Pool.DialTimeout,
 	})
+	defer connPool.Close("all")
+
+	// Initialize IMAP session pool
 
 	// Start pool cleanup
 	poolCtx, poolCancel := context.WithCancel(context.Background())
@@ -97,20 +99,13 @@ func main() {
 	// Initialize account store
 	log.Printf("Initializing account store (type=%s)...", cfg.Store.Type)
 	var accountStore store.AccountStore
-
 	switch cfg.Store.Type {
 	case "sqlite", "":
-		sqliteConfig := store.SQLiteConfig{
+		accountStore, err = store.NewSQLiteStore(store.SQLiteConfig{
 			Path:           cfg.Store.SQLite.Path,
 			MaxConnections: cfg.Store.SQLite.MaxConnections,
 			BusyTimeoutMs:  cfg.Store.SQLite.BusyTimeoutMs,
-		}
-		accountStore, err = store.NewSQLiteStore(sqliteConfig)
-		if err != nil {
-			log.Fatalf("Failed to initialize SQLite store: %v", err)
-		}
-		log.Printf("SQLite store initialized at %s", cfg.Store.SQLite.Path)
-
+		})
 	case "memory":
 		accountStore = store.NewMemoryStore()
 		log.Println("Memory store initialized (data will not persist)")
@@ -118,12 +113,17 @@ func main() {
 	default:
 		log.Fatalf("Unknown store type: %s", cfg.Store.Type)
 	}
+	if err != nil {
+		log.Fatalf("Failed to initialize account store: %v", err)
+	}
+	defer accountStore.Close()
 
 	// Initialize fair-use scheduler
 	fairUseScheduler := scheduler.NewFairUseScheduler()
 
-	// Initialize IMAP Session Pool
-	imapSessionPool := pool.NewIMAPSessionPool(pool.DefaultSessionPoolConfig())
+	// Initialize IMAP Session Pool (with nil account service initially)
+	// Will set account service after accountService is created
+	imapSessionPool := pool.NewIMAPSessionPool(pool.DefaultSessionPoolConfig(), nil)
 	go imapSessionPool.StartMaintenance(poolCtx)
 
 	// Initialize services
@@ -133,7 +133,7 @@ func main() {
 		imapSessionPool,
 		memCache,
 		fairUseScheduler,
-		nil, // syncMgr will be set later
+		nil, // syncMgr - nil since sync runs externally
 		service.AccountServiceConfig{
 			EncryptionKey: cfg.Security.EncryptionKey,
 		},
@@ -142,20 +142,25 @@ func main() {
 		log.Fatalf("Failed to create account service: %v", err)
 	}
 
-	// Load existing accounts from store on startup
-	log.Println("Loading accounts from store...")
-	accounts, err := accountService.ListAccounts(context.Background())
-	if err != nil {
-		log.Printf("Warning: Failed to load accounts from store: %v", err)
-	} else {
-		log.Printf("Loaded %d accounts from store", len(accounts))
+	// Set the account service in the session pool (circular dependency resolution)
+	imapSessionPool.SetAccountService(accountService)
 
-		// Restore active connections for each account
-		for _, acc := range accounts {
-			if acc.Status == models.AccountStatusActive {
-				log.Printf("Restoring account %s (%s)", acc.ID, acc.Email)
-				// Reinitialize fair-use scheduling
-				fairUseScheduler.InitializeAccount(acc.ID, acc.SyncSettings.FairUsePolicy)
+	// Initialize accounts from store
+	if cfg.Scheduler.Enabled {
+		log.Println("Loading accounts from store...")
+		accounts, err := accountService.ListAccounts(context.Background())
+		if err != nil {
+			log.Printf("Warning: Failed to load accounts from store: %v", err)
+		} else {
+			log.Printf("Loaded %d accounts from store", len(accounts))
+
+			// Restore active connections for each account
+			for _, acc := range accounts {
+				if acc.Status == models.AccountStatusActive {
+					log.Printf("Restoring account %s (%s)", acc.ID, acc.Email)
+					// Reinitialize fair-use scheduling
+					fairUseScheduler.InitializeAccount(acc.ID, acc.SyncSettings.FairUsePolicy)
+				}
 			}
 		}
 	}
@@ -176,10 +181,10 @@ func main() {
 
 	attachmentStorage := storage.NewAttachmentStorage(cfg.Storage.AttachmentPath)
 
-	// Initialize sync manager with services
-	syncMgr := service.NewSyncManager(messageService, accountService, imapSessionPool)
-	// Update account service with sync manager
-	accountService.SetSyncManager(syncMgr)
+	// Note: Sync and envelope processing run as separate workers:
+	// - cmd/sync_worker: Fetches envelopes from IMAP and enqueues for processing
+	// - cmd/processor_worker: Processes envelopes (fetches bodies, extracts data)
+	// This decoupling allows independent scaling and deployment.
 
 	sendService, err := service.NewSendService(
 		connPool,
@@ -232,6 +237,8 @@ func main() {
 		c.String(http.StatusOK, "OK")
 	})
 
+	// Start HTTP server
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	// Initialize Vite handler for frontend
 	var viteHandler *vite.Handler
 	if *isDev {
@@ -246,14 +253,10 @@ func main() {
 			log.Fatalf("Failed to initialize Vite handler: %v", err)
 		}
 	} else {
-		log.Println("Starting in production mode with embedded frontend assets")
-		viteHandler, err = vite.NewHandler(vite.Config{
-			FS:    webmail_engine.GetDistFS(),
-			IsDev: false,
-		})
-		if err != nil {
-			log.Fatalf("Failed to initialize Vite handler: %v", err)
-		}
+		log.Println("Starting in production mode with compiled frontend assets")
+		frontendPath := path.Join("..", "frontend", "dist")
+		router.Use(staticMiddleware(frontendPath))
+
 	}
 
 	// Register Vite handler for frontend routes (SPA support)
@@ -274,12 +277,16 @@ func main() {
 		}
 
 		// Let Vite handler serve the request (handles both dev proxy and prod embedded assets)
-		viteHandler.ServeHTTP(c.Writer, c.Request)
+		if viteHandler != nil {
+			viteHandler.ServeHTTP(c.Writer, c.Request)
+		} else {
+			c.Status(http.StatusNotFound)
+		}
 	})
 
 	// Create HTTP server
 	server := &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
+		Addr:         addr,
 		Handler:      router,
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
@@ -289,7 +296,7 @@ func main() {
 	// Start server in goroutine
 	serverErr := make(chan error, 1)
 	go func() {
-		log.Printf("Starting server on %s:%d", cfg.Server.Host, cfg.Server.Port)
+		log.Printf("Starting API server on %s", addr)
 		if cfg.Server.TLSEnabled {
 			err := server.ListenAndServeTLS(cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
 			if err != nil && err != http.ErrServerClosed {
@@ -325,9 +332,6 @@ func main() {
 	// Cleanup
 	poolCancel()
 	webhookCancel()
-	if syncMgr != nil {
-		syncMgr.StopAll()
-	}
 	if accountStore != nil {
 		accountStore.Close()
 	}
@@ -337,4 +341,17 @@ func main() {
 	}
 
 	log.Println("Webmail engine stopped")
+}
+
+// staticMiddleware serves static files from a directory
+func staticMiddleware(root string) gin.HandlerFunc {
+	fs := http.FileServer(http.Dir(root))
+	return func(c *gin.Context) {
+		// Check if file exists, otherwise serve index.html for SPA routing
+		path := c.Request.URL.Path
+		if _, err := os.Stat(root + path); os.IsNotExist(err) {
+			c.Request.URL.Path = "/"
+		}
+		fs.ServeHTTP(c.Writer, c.Request)
+	}
 }

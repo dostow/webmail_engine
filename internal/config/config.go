@@ -10,22 +10,22 @@ import (
 
 // Config holds all configuration for the webmail engine
 type Config struct {
-	Server      ServerConfig      `json:"server"`
-	Redis       RedisConfig       `json:"redis"`
-	Pool        PoolConfig        `json:"pool"`
-	Scheduler   SchedulerConfig   `json:"scheduler"`
-	Security    SecurityConfig    `json:"security"`
-	Storage     StorageConfig     `json:"storage"`
-	Webhook     WebhookConfig     `json:"webhook"`
-	Logging     LoggingConfig     `json:"logging"`
-	Store       StoreConfig       `json:"store"`
+	Server    ServerConfig    `json:"server"`
+	Redis     RedisConfig     `json:"redis"`
+	Pool      PoolConfig      `json:"pool"`
+	Scheduler SchedulerConfig `json:"scheduler"`
+	Security  SecurityConfig  `json:"security"`
+	Storage   StorageConfig   `json:"storage"`
+	Webhook   WebhookConfig   `json:"webhook"`
+	Logging   LoggingConfig   `json:"logging"`
+	Store     StoreConfig     `json:"store"`
 }
 
 // StoreConfig holds account persistence store configuration
 type StoreConfig struct {
-	Type     string              `json:"type"` // "memory", "sqlite", "postgres"
-	SQLite   *SQLiteConfig       `json:"sqlite,omitempty"`
-	Postgres *PostgresConfig     `json:"postgres,omitempty"`
+	Type     string          `json:"type"` // "memory", "sqlite", "postgres"
+	SQLite   *SQLiteConfig   `json:"sqlite,omitempty"`
+	Postgres *PostgresConfig `json:"postgres,omitempty"`
 }
 
 // SQLiteConfig holds SQLite configuration
@@ -37,15 +37,15 @@ type SQLiteConfig struct {
 
 // PostgresConfig holds PostgreSQL configuration
 type PostgresConfig struct {
-	Host         string `json:"host"`
-	Port         int    `json:"port"`
-	Database     string `json:"database"`
-	User         string `json:"user"`
-	Password     string `json:"password"`
-	SSLMode      string `json:"ssl_mode"` // "disable", "require", "verify-full"
-	MaxConnections int  `json:"max_connections"`
-	MinIdle      int    `json:"min_idle"`
-	ConnTimeoutMs int   `json:"conn_timeout_ms"`
+	Host           string `json:"host"`
+	Port           int    `json:"port"`
+	Database       string `json:"database"`
+	User           string `json:"user"`
+	Password       string `json:"password"`
+	SSLMode        string `json:"ssl_mode"` // "disable", "require", "verify-full"
+	MaxConnections int    `json:"max_connections"`
+	MinIdle        int    `json:"min_idle"`
+	ConnTimeoutMs  int    `json:"conn_timeout_ms"`
 }
 
 // ServerConfig holds HTTP server configuration
@@ -63,47 +63,47 @@ type ServerConfig struct {
 
 // RedisConfig holds Redis configuration
 type RedisConfig struct {
-	Host            string        `json:"host"`
-	Port            int           `json:"port"`
-	Password        string        `json:"password"`
-	DB              int           `json:"db"`
-	PoolSize        int           `json:"pool_size"`
-	MinIdleConns    int           `json:"min_idle_conns"`
-	ConnTimeout     time.Duration `json:"conn_timeout"`
-	ReadTimeout     time.Duration `json:"read_timeout"`
-	WriteTimeout    time.Duration `json:"write_timeout"`
-	MaxRetries      int           `json:"max_retries"`
+	Host         string        `json:"host"`
+	Port         int           `json:"port"`
+	Password     string        `json:"password"`
+	DB           int           `json:"db"`
+	PoolSize     int           `json:"pool_size"`
+	MinIdleConns int           `json:"min_idle_conns"`
+	ConnTimeout  time.Duration `json:"conn_timeout"`
+	ReadTimeout  time.Duration `json:"read_timeout"`
+	WriteTimeout time.Duration `json:"write_timeout"`
+	MaxRetries   int           `json:"max_retries"`
 }
 
 // PoolConfig holds connection pool configuration
 type PoolConfig struct {
-	MaxConnections int           `json:"max_connections"`
-	IdleTimeout    time.Duration `json:"idle_timeout"`
-	DialTimeout    time.Duration `json:"dial_timeout"`
+	MaxConnections  int           `json:"max_connections"`
+	IdleTimeout     time.Duration `json:"idle_timeout"`
+	DialTimeout     time.Duration `json:"dial_timeout"`
 	CleanupInterval time.Duration `json:"cleanup_interval"`
 }
 
 // SchedulerConfig holds fair-use scheduler configuration
 type SchedulerConfig struct {
-	Enabled          bool              `json:"enabled"`
-	DefaultBucketSize int              `json:"default_bucket_size"`
-	DefaultRefillRate int              `json:"default_refill_rate"`
-	OperationCosts   map[string]int    `json:"operation_costs"`
-	QueueSize        int               `json:"queue_size"`
-	MaxQueueWait     time.Duration     `json:"max_queue_wait"`
+	Enabled           bool           `json:"enabled"`
+	DefaultBucketSize int            `json:"default_bucket_size"`
+	DefaultRefillRate int            `json:"default_refill_rate"`
+	OperationCosts    map[string]int `json:"operation_costs"`
+	QueueSize         int            `json:"queue_size"`
+	MaxQueueWait      time.Duration  `json:"max_queue_wait"`
 }
 
 // SecurityConfig holds security configuration
 type SecurityConfig struct {
-	EncryptionKey      string        `json:"encryption_key"`
-	WebhookSecret      string        `json:"webhook_secret"`
-	SignedURLSecret    string        `json:"signed_url_secret"`
-	SignedURLExpiry    time.Duration `json:"signed_url_expiry"`
-	MaxAttachmentSize  int64         `json:"max_attachment_size"`
-	AllowedOrigins     []string      `json:"allowed_origins"`
-	RateLimitEnabled   bool          `json:"rate_limit_enabled"`
-	RateLimitRequests  int           `json:"rate_limit_requests"`
-	RateLimitWindow    time.Duration `json:"rate_limit_window"`
+	EncryptionKey     string        `json:"encryption_key"`
+	WebhookSecret     string        `json:"webhook_secret"`
+	SignedURLSecret   string        `json:"signed_url_secret"`
+	SignedURLExpiry   time.Duration `json:"signed_url_expiry"`
+	MaxAttachmentSize int64         `json:"max_attachment_size"`
+	AllowedOrigins    []string      `json:"allowed_origins"`
+	RateLimitEnabled  bool          `json:"rate_limit_enabled"`
+	RateLimitRequests int           `json:"rate_limit_requests"`
+	RateLimitWindow   time.Duration `json:"rate_limit_window"`
 }
 
 // StorageConfig holds storage configuration
@@ -117,12 +117,12 @@ type StorageConfig struct {
 
 // WebhookConfig holds webhook configuration
 type WebhookConfig struct {
-	Enabled           bool          `json:"enabled"`
-	MaxRetries        int           `json:"max_retries"`
-	RetryBackoff      time.Duration `json:"retry_backoff"`
-	Timeout           time.Duration `json:"timeout"`
-	EventRetention    time.Duration `json:"event_retention"`
-	CleanupInterval   time.Duration `json:"cleanup_interval"`
+	Enabled         bool          `json:"enabled"`
+	MaxRetries      int           `json:"max_retries"`
+	RetryBackoff    time.Duration `json:"retry_backoff"`
+	Timeout         time.Duration `json:"timeout"`
+	EventRetention  time.Duration `json:"event_retention"`
+	CleanupInterval time.Duration `json:"cleanup_interval"`
 }
 
 // LoggingConfig holds logging configuration
@@ -146,16 +146,16 @@ func DefaultConfig() *Config {
 			TLSEnabled:      false,
 		},
 		Redis: RedisConfig{
-			Host:            "localhost",
-			Port:            6379,
-			Password:        "",
-			DB:              0,
-			PoolSize:        10,
-			MinIdleConns:    5,
-			ConnTimeout:     10 * time.Second,
-			ReadTimeout:     3 * time.Second,
-			WriteTimeout:    3 * time.Second,
-			MaxRetries:      3,
+			Host:         "localhost",
+			Port:         6379,
+			Password:     "",
+			DB:           0,
+			PoolSize:     10,
+			MinIdleConns: 5,
+			ConnTimeout:  10 * time.Second,
+			ReadTimeout:  3 * time.Second,
+			WriteTimeout: 3 * time.Second,
+			MaxRetries:   3,
 		},
 		Pool: PoolConfig{
 			MaxConnections:  100,
@@ -292,8 +292,18 @@ func (c *Config) Validate() error {
 	if c.Security.EncryptionKey == "" {
 		return fmt.Errorf("encryption key is required")
 	}
-	if len(c.Security.EncryptionKey) != 32 {
-		return fmt.Errorf("encryption key must be 32 bytes")
+	// Key can be 32 bytes raw or 64 hex characters
+	keyLen := len(c.Security.EncryptionKey)
+	if keyLen != 32 && keyLen != 64 {
+		return fmt.Errorf("encryption key must be 32 bytes (raw) or 64 hex characters, got %d", keyLen)
+	}
+	// If hex-encoded, validate it's valid hex
+	if keyLen == 64 {
+		for _, r := range c.Security.EncryptionKey {
+			if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+				return fmt.Errorf("encryption key contains invalid hex characters")
+			}
+		}
 	}
 
 	// Validate server port

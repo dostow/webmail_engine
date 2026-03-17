@@ -11,6 +11,7 @@ import {
   SettingsView,
   ServerCapabilitiesOverviewView,
 } from '@/components/features';
+import { MessagesErrorBoundary } from '@/components/features/messages/MessagesErrorBoundary';
 import {
   accountsLoader,
   messagesLoader,
@@ -56,6 +57,7 @@ export const router = createBrowserRouter([
         path: 'messages',
         element: <MessagesView />,
         loader: messagesLoader,
+        errorElement: <MessagesErrorBoundary />,
       },
       {
         // Standalone compose still available from the nav

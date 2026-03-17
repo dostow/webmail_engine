@@ -3,6 +3,7 @@ package crypto
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ type Encryptor struct {
 
 // NewEncryptor creates a new encryptor with the given key
 // Key must be exactly 32 bytes (256 bits) for XChaCha20-Poly1305
+// Key can be provided as raw 32-byte string or hex-encoded (64 chars)
 func NewEncryptor(key string) (*Encryptor, error) {
 	keyBytes, err := ParseEncryptionKey(key)
 	if err != nil {
@@ -48,6 +50,10 @@ func (e *Encryptor) Encrypt(plaintext string) (string, error) {
 // Decrypt decrypts ciphertext using XChaCha20-Poly1305
 // Expects the nonce to be prepended to the ciphertext
 func (e *Encryptor) Decrypt(ciphertextStr string) (string, error) {
+	if e == nil || e.key == nil {
+		return "", errors.New("encryptor not initialized: encryption key is nil")
+	}
+
 	aead, err := chacha20poly1305.NewX(e.key)
 	if err != nil {
 		return "", err
@@ -75,12 +81,22 @@ func (e *Encryptor) Decrypt(ciphertextStr string) (string, error) {
 
 // ParseEncryptionKey parses and validates an encryption key
 // XChaCha20-Poly1305 requires exactly 32 bytes (256 bits)
+// Key can be provided as raw 32-byte string or hex-encoded (64 hex chars)
 func ParseEncryptionKey(key string) ([]byte, error) {
 	if key == "" {
 		// Use default key (in production, this should be configured via environment)
 		key = "default-encryption-key-32-bytes!"
 	}
 
+	// If key is 64 hex characters, decode it to 32 bytes
+	if len(key) == 64 {
+		keyBytes, err := hex.DecodeString(key)
+		if err == nil && len(keyBytes) == 32 {
+			return keyBytes, nil
+		}
+	}
+
+	// Otherwise, expect raw 32-byte key
 	if len(key) != 32 {
 		return nil, fmt.Errorf("encryption key must be 32 bytes (256 bits) for XChaCha20-Poly1305, got %d bytes", len(key))
 	}

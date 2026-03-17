@@ -18,11 +18,25 @@ export async function messagesLoader({ params, request }: LoaderFunctionArgs) {
   let total = 0;
 
   if (selectedId) {
-    // Use proper cursor format matching backend's CursorData structure
-    const cursor = page > 1 ? btoa(JSON.stringify({ page: page - 1, sort_by: 'date', sort_order: 'desc' })) : '';
-    const response = await api.getMessages(selectedId, 'INBOX', 50, cursor, 'date', 'desc');
-    messages = response.messages;
-    total = response.total_count;
+    try {
+      // Use proper cursor format matching backend's CursorData structure
+      const cursor = page > 1 ? btoa(JSON.stringify({ page: page - 1, sort_by: 'date', sort_order: 'desc' })) : '';
+      const response = await api.getMessages(selectedId, 'INBOX', 50, cursor, 'date', 'desc');
+      messages = response.messages;
+      total = response.total_count;
+    } catch (err: any) {
+      // Handle authentication errors - redirect to account detail page
+      // AUTH_ERROR indicates the account is disabled or needs re-authentication
+      if (err?.code === 'AUTH_ERROR') {
+        // Find the account and redirect to its detail page
+        const account = accounts.find((a) => a.id === selectedId);
+        if (account) {
+          return redirect(`/accounts/${selectedId}?error=account_disabled`);
+        }
+      }
+      // Re-throw other errors
+      throw err;
+    }
   }
 
   return { accounts, messages, total, selectedAccountId: selectedId };

@@ -38,15 +38,6 @@ type EnvelopeProcessorConfig struct {
 	// PollInterval is how often to check for new envelopes
 	PollInterval time.Duration `json:"poll_interval"`
 
-	// EnableBodyFetch controls whether to fetch full message bodies
-	EnableBodyFetch bool `json:"enable_body_fetch"`
-
-	// EnableLinkExtraction controls whether to extract links from messages
-	EnableLinkExtraction bool `json:"enable_link_extraction"`
-
-	// EnableAttachmentProcessing controls whether to process attachments
-	EnableAttachmentProcessing bool `json:"enable_attachment_processing"`
-
 	// CleanupInterval is how often to clean up old processed envelopes
 	CleanupInterval time.Duration `json:"cleanup_interval"`
 
@@ -63,15 +54,12 @@ type EnvelopeProcessorConfig struct {
 // DefaultEnvelopeProcessorConfig returns default processor configuration
 func DefaultEnvelopeProcessorConfig() *EnvelopeProcessorConfig {
 	return &EnvelopeProcessorConfig{
-		Concurrency:                4,
-		BatchSize:                  20,
-		PollInterval:               5 * time.Second,
-		EnableBodyFetch:            true,
-		EnableLinkExtraction:       true,
-		EnableAttachmentProcessing: true,
-		CleanupInterval:            1 * time.Hour,
-		CleanupAge:                 24 * time.Hour,
-		TempStoragePath:            "/tmp/webmail",
+		Concurrency:     4,
+		BatchSize:       20,
+		PollInterval:    5 * time.Second,
+		CleanupInterval: 1 * time.Hour,
+		CleanupAge:      24 * time.Hour,
+		TempStoragePath: "/tmp/webmail",
 		PriorityWeights: map[models.EnvelopeProcessingPriority]int{
 			models.PriorityHigh:   10,
 			models.PriorityNormal: 5,
@@ -83,12 +71,12 @@ func DefaultEnvelopeProcessorConfig() *EnvelopeProcessorConfig {
 // ProcessorStats holds runtime statistics
 type ProcessorStats struct {
 	mu                sync.RWMutex
-	ProcessedCount    int64 `json:"processed_count"`
-	FailedCount       int64 `json:"failed_count"`
-	SkippedCount      int64 `json:"skipped_count"`
-	LastProcessedAt   time.Time `json:"last_processed_at"`
+	ProcessedCount    int64         `json:"processed_count"`
+	FailedCount       int64         `json:"failed_count"`
+	SkippedCount      int64         `json:"skipped_count"`
+	LastProcessedAt   time.Time     `json:"last_processed_at"`
 	AvgProcessingTime time.Duration `json:"avg_processing_time"`
-	CurrentQueueSize  int64 `json:"current_queue_size"`
+	CurrentQueueSize  int64         `json:"current_queue_size"`
 }
 
 // NewEnvelopeProcessor creates a new envelope processor
@@ -163,7 +151,9 @@ func (p *EnvelopeProcessor) worker(id int) {
 	log.Printf("Envelope worker %d started", id)
 
 	// Check if queue supports channel-based dequeuing
-	if channelQueue, ok := p.queue.(interface{ DequeueChannel(context.Context) (*models.EnvelopeQueueItem, error) }); ok {
+	if channelQueue, ok := p.queue.(interface {
+		DequeueChannel(context.Context) (*models.EnvelopeQueueItem, error)
+	}); ok {
 		// Use channel-based processing (more efficient, no polling)
 		p.channelWorker(id, channelQueue)
 	} else {
@@ -173,7 +163,9 @@ func (p *EnvelopeProcessor) worker(id int) {
 }
 
 // channelWorker processes envelopes using channel-based dequeuing
-func (p *EnvelopeProcessor) channelWorker(id int, channelQueue interface{ DequeueChannel(context.Context) (*models.EnvelopeQueueItem, error) }) {
+func (p *EnvelopeProcessor) channelWorker(id int, channelQueue interface {
+	DequeueChannel(context.Context) (*models.EnvelopeQueueItem, error)
+}) {
 	log.Printf("Envelope channel worker %d started", id)
 
 	for {
@@ -336,8 +328,8 @@ func (p *EnvelopeProcessor) executeProcessing(envelope *models.EnvelopeQueueItem
 	}
 	defer release()
 
-	// Fetch full message with body if enabled
-	includeBody := p.config.EnableBodyFetch
+	// Fetch full message with body based on per-account sync settings
+	includeBody := account.SyncSettings.FetchBody
 	envelopes, err := client.FetchMessages([]uint32{envelope.UID}, includeBody)
 	if err != nil {
 		return fmt.Errorf("failed to fetch message: %w", err)
@@ -380,15 +372,15 @@ func (p *EnvelopeProcessor) storeAndProcessMessage(
 	// For now, log the processing
 	log.Printf("Processing message %s from %s (body: %v)", message.MessageID, message.From.Address, includeBody)
 
-	// Extract links if enabled
-	if p.config.EnableLinkExtraction && includeBody {
+	// Extract links if enabled in account sync settings
+	if account.SyncSettings.EnableLinkExtraction && includeBody {
 		// links := extractLinks(message.Body)
 		// message.Links = links
 		log.Printf("Link extraction enabled for message %s", message.MessageID)
 	}
 
-	// Process attachments if enabled
-	if p.config.EnableAttachmentProcessing && includeBody {
+	// Process attachments if enabled in account sync settings
+	if account.SyncSettings.EnableAttachmentProcessing && includeBody {
 		// attachments := processAttachments(message.Attachments)
 		// message.Attachments = attachments
 		log.Printf("Attachment processing enabled for message %s", message.MessageID)
@@ -430,16 +422,16 @@ func (p *EnvelopeProcessor) convertToMessage(
 	}
 
 	return &models.Message{
-		UID:        fmt.Sprintf("%d", fetched.UID),
-		MessageID:  fetched.MessageID,
-		Folder:     envelope.FolderName,
-		Subject:    fetched.Subject,
-		From:       from,
-		To:         convertContacts(fetched.To),
-		Date:       fetched.Date,
-		Flags:      convertFlags(fetched.Flags),
-		Size:       fetched.Size,
-		ThreadID:   threadID,
+		UID:         fmt.Sprintf("%d", fetched.UID),
+		MessageID:   fetched.MessageID,
+		Folder:      envelope.FolderName,
+		Subject:     fetched.Subject,
+		From:        from,
+		To:          convertContacts(fetched.To),
+		Date:        fetched.Date,
+		Flags:       convertFlags(fetched.Flags),
+		Size:        fetched.Size,
+		ThreadID:    threadID,
 		ContentType: models.ContentTypeTextPlain, // Default, would be determined from body
 	}
 }
@@ -513,8 +505,8 @@ func convertFlags(flags []string) []models.MessageFlag {
 
 // EnvelopeProcessingPipeline represents the complete envelope processing setup
 type EnvelopeProcessingPipeline struct {
-	Queue      envelopequeue.EnvelopeQueue
-	Processor  *EnvelopeProcessor
+	Queue       envelopequeue.EnvelopeQueue
+	Processor   *EnvelopeProcessor
 	SyncManager *SyncManager
 }
 
@@ -631,6 +623,6 @@ func (p *EnvelopeProcessingPipeline) GetPipelineStats() (*PipelineStats, error) 
 
 // PipelineStats holds statistics for the entire processing pipeline
 type PipelineStats struct {
-	ProcessorStats ProcessorStats       `json:"processor_stats"`
+	ProcessorStats ProcessorStats                   `json:"processor_stats"`
 	QueueStats     envelopequeue.EnvelopeQueueStats `json:"queue_stats"`
 }

@@ -126,7 +126,7 @@ export function UpdateCredentialsDialog({
                 <select
                   id="imap_encryption"
                   value={formData.imap_encryption}
-                  onChange={(e) => setFormData({ ...formData, imap_encryption: e.target.value })}
+                  onChange={(e) => setFormData({ ...formData, imap_encryption: e.target.value as 'ssl' | 'starttls' | 'tls' | 'none' })}
                   className="flex h-9 w-full rounded-lg border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   <option value="ssl">SSL/TLS</option>
@@ -167,7 +167,7 @@ export function UpdateCredentialsDialog({
                 <select
                   id="smtp_encryption"
                   value={formData.smtp_encryption}
-                  onChange={(e) => setFormData({ ...formData, smtp_encryption: e.target.value })}
+                  onChange={(e) => setFormData({ ...formData, smtp_encryption: e.target.value as 'ssl' | 'starttls' | 'tls' | 'none' })}
                   className="flex h-9 w-full rounded-lg border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   <option value="starttls">STARTTLS</option>

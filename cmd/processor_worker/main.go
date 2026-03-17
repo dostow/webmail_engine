@@ -47,15 +47,12 @@ func main() {
 		cfg.Store.Postgres.User = *postgresUser
 		cfg.Store.Postgres.Password = *postgresPassword
 		cfg.ProcessorConfig = &service.EnvelopeProcessorConfig{
-			Concurrency:                *concurrency,
-			BatchSize:                  20,
-			PollInterval:               5 * time.Second,
-			EnableBodyFetch:            true,
-			EnableLinkExtraction:       true,
-			EnableAttachmentProcessing: true,
-			CleanupInterval:            1 * time.Hour,
-			CleanupAge:                 24 * time.Hour,
-			TempStoragePath:            *attachmentPath,
+			Concurrency:     *concurrency,
+			BatchSize:       20,
+			PollInterval:    5 * time.Second,
+			CleanupInterval: 1 * time.Hour,
+			CleanupAge:      24 * time.Hour,
+			TempStoragePath: *attachmentPath,
 		}
 	}
 

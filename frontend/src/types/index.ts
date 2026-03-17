@@ -3,7 +3,7 @@
 export interface Account {
   id: string;
   email: string;
-  status: 'active' | 'inactive' | 'error' | 'syncing';
+  status: 'active' | 'inactive' | 'error' | 'syncing' | 'disabled' | 'auth_required' | 'throttled';
   auth_type?: 'password' | 'oauth2' | 'app_password';
   created_at: string;
   updated_at: string;

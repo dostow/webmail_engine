@@ -194,14 +194,17 @@ type ProxySettings struct {
 
 // SyncSettings represents data collection preferences
 type SyncSettings struct {
-	HistoricalScope    int            `json:"historical_scope"` // days
-	AutoSync           bool           `json:"auto_sync"`
-	SyncInterval       int            `json:"sync_interval"` // seconds
-	IncludeSpam        bool           `json:"include_spam"`
-	IncludeTrash       bool           `json:"include_trash"`
-	MaxMessageSize     int            `json:"max_message_size"`    // bytes
-	AttachmentHandling string         `json:"attachment_handling"` // inline, url, skip
-	FairUsePolicy      *FairUsePolicy `json:"fair_use_policy,omitempty"`
+	HistoricalScope            int            `json:"historical_scope"` // days
+	AutoSync                   bool           `json:"auto_sync"`
+	SyncInterval               int            `json:"sync_interval"` // seconds
+	IncludeSpam                bool           `json:"include_spam"`
+	IncludeTrash               bool           `json:"include_trash"`
+	MaxMessageSize             int            `json:"max_message_size"`    // bytes
+	AttachmentHandling         string         `json:"attachment_handling"` // inline, url, skip
+	FetchBody                  bool           `json:"fetch_body"`          // whether to fetch full message bodies
+	EnableLinkExtraction       bool           `json:"enable_link_extraction"`
+	EnableAttachmentProcessing bool           `json:"enable_attachment_processing"`
+	FairUsePolicy              *FairUsePolicy `json:"fair_use_policy,omitempty"`
 }
 
 // FolderSyncState tracks synchronization state for a single folder

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -7,7 +7,7 @@ import type { Account } from '@/types';
 import * as api from '@/services/api';
 
 interface UpdateCredentialsDialogProps {
-  account: Account;
+  account: Account | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
@@ -21,18 +21,34 @@ export function UpdateCredentialsDialog({
 }: UpdateCredentialsDialogProps) {
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
-    email: account.email,
+    email: '',
     password: '',
-    imap_host: account.imap_config.host,
-    imap_port: account.imap_config.port.toString(),
-    imap_encryption: account.imap_config.encryption,
-    smtp_host: account.smtp_config.host,
-    smtp_port: account.smtp_config.port.toString(),
-    smtp_encryption: account.smtp_config.encryption,
+    imap_host: '',
+    imap_port: '',
+    imap_encryption: 'ssl',
+    smtp_host: '',
+    smtp_port: '',
+    smtp_encryption: 'ssl',
   });
+
+  useEffect(() => {
+    if (account) {
+      setFormData({
+        email: account.email,
+        password: '',
+        imap_host: account.imap_config.host,
+        imap_port: account.imap_config.port.toString(),
+        imap_encryption: account.imap_config.encryption,
+        smtp_host: account.smtp_config.host,
+        smtp_port: account.smtp_config.port.toString(),
+        smtp_encryption: account.smtp_config.encryption,
+      });
+    }
+  }, [account]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!account) return;
     setLoading(true);
 
     try {
@@ -82,13 +98,13 @@ export function UpdateCredentialsDialog({
                 </div>
                 <div>
                   <Label htmlFor="password">
-                    Password {account.status === 'disabled' && '(Required to re-enable)'}
+                    Password {account?.status === 'disabled' && '(Required to re-enable)'}
                   </Label>
                   <Input
                     id="password"
                     type="password"
-                    required={account.status === 'disabled'}
-                    placeholder={account.status === 'disabled' ? 'Enter password to re-enable' : '••••••••'}
+                    required={account?.status === 'disabled'}
+                    placeholder={account?.status === 'disabled' ? 'Enter password to re-enable' : '••••••••'}
                     value={formData.password}
                     onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                   />

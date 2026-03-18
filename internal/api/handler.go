@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"webmail_engine/internal/models"
 	"webmail_engine/internal/service"
@@ -83,6 +84,7 @@ func (h *APIHandler) RegisterRoutes(router *gin.Engine) {
 	router.PATCH("/v1/accounts/:id/sync-settings", h.updateSyncSettings)
 	router.GET("/v1/accounts/:id/capabilities", h.getServerCapabilities)
 	router.POST("/v1/accounts/:id/capabilities/refresh", h.refreshServerCapabilities)
+	router.GET("/v1/accounts/:id/folders", h.getAccountFolders)
 
 	// Message routes (with account status middleware)
 	accountRoutes := router.Group("/v1/accounts/:id")
@@ -555,6 +557,47 @@ func respondError(c *gin.Context, err error) {
 			"message": apiErr.Message,
 			"details": apiErr.Details,
 		},
+	})
+}
+
+// FolderSyncInfo represents folder synchronization information
+type FolderSyncInfo struct {
+	Name          string    `json:"name"`
+	Messages      int       `json:"messages"`
+	Unseen        int       `json:"unseen"`
+	LastSync      time.Time `json:"last_sync"`
+	IsInitialized bool      `json:"is_initialized"`
+	UIDValidity   uint32    `json:"uid_validity"`
+}
+
+// getAccountFolders returns folder sync information for an account
+func (h *APIHandler) getAccountFolders(c *gin.Context) {
+	accountID := c.Param("id")
+
+	// Get folder sync states from store
+	states, err := h.store.ListFolderSyncStates(c.Request.Context(), accountID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Convert to response format
+	folders := make([]FolderSyncInfo, len(states))
+	for i, state := range states {
+		folders[i] = FolderSyncInfo{
+			Name:          state.FolderName,
+			Messages:      int(state.MessageCount),
+			Unseen:        0, // Would need to fetch from cache or IMAP
+			LastSync:      state.LastSyncTime,
+			IsInitialized: state.IsInitialized,
+			UIDValidity:   state.UIDValidity,
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"account_id": accountID,
+		"folders":    folders,
+		"total":      len(folders),
 	})
 }
 

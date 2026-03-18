@@ -10,6 +10,7 @@ import {
   HealthView,
   SettingsView,
   ServerCapabilitiesOverviewView,
+  ProcessorManagementView,
 } from '@/components/features';
 import { MessagesErrorBoundary } from '@/components/features/messages/MessagesErrorBoundary';
 import {
@@ -74,6 +75,10 @@ export const router = createBrowserRouter([
       {
         path: 'settings',
         element: <SettingsView />,
+      },
+      {
+        path: 'accounts/:accountId/processors',
+        element: <ProcessorManagementView />,
       },
       {
         path: '*',

@@ -45,6 +45,12 @@ func (h *ProcessorHandler) RegisterRoutes(router *gin.RouterGroup) {
 
 		// Get processor type info
 		processorGroup.GET("/types/:processor_type", h.getProcessorTypeInfo)
+
+		// Create/link processor to account
+		processorGroup.POST("/accounts/:account_id/processors", h.createAccountProcessor)
+
+		// Remove processor from account
+		processorGroup.DELETE("/accounts/:account_id/processors/:processor_type", h.deleteAccountProcessor)
 	}
 }
 
@@ -193,11 +199,119 @@ func (h *ProcessorHandler) toggleProcessor(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "updated"})
 }
 
+// CreateAccountProcessorRequest represents a request to link a processor to an account
+type CreateAccountProcessorRequest struct {
+	Type     string                 `json:"type" binding:"required"`
+	Meta     map[string]interface{} `json:"meta"`
+	Enabled  bool                   `json:"enabled"`
+	Priority int                    `json:"priority"`
+}
+
+// createAccountProcessor links a processor to an account
+func (h *ProcessorHandler) createAccountProcessor(c *gin.Context) {
+	accountID := c.Param("account_id")
+
+	var req CreateAccountProcessorRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate processor type
+	registry := processor.GlobalRegistry()
+	if !registry.IsRegistered(req.Type) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("unknown processor type: %s", req.Type),
+		})
+		return
+	}
+
+	// Get existing configs
+	existingConfigs, err := h.store.GetAccountProcessorConfigs(c.Request.Context(), accountID)
+	if err != nil && !store.IsNotFound(err) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Marshal meta
+	metaJSON, _ := json.Marshal(req.Meta)
+
+	// Check if processor already exists
+	exists := false
+	for i, cfg := range existingConfigs {
+		if cfg.Type == req.Type {
+			// Update existing
+			existingConfigs[i].Meta = json.RawMessage(metaJSON)
+			existingConfigs[i].Enabled = req.Enabled
+			existingConfigs[i].Priority = req.Priority
+			exists = true
+			break
+		}
+	}
+
+	if !exists {
+		// Add new
+		existingConfigs = append(existingConfigs, models.AccountProcessorConfig{
+			Type:     req.Type,
+			Meta:     json.RawMessage(metaJSON),
+			Enabled:  req.Enabled,
+			Priority: req.Priority,
+		})
+	}
+
+	// Save updated configs
+	err = h.store.UpdateAccountProcessorConfigs(c.Request.Context(), accountID, existingConfigs)
+	if err != nil {
+		if store.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "created", "type": req.Type})
+}
+
+// deleteAccountProcessor removes a processor from an account
+func (h *ProcessorHandler) deleteAccountProcessor(c *gin.Context) {
+	accountID := c.Param("account_id")
+	processorType := c.Param("processor_type")
+
+	configs, err := h.store.GetAccountProcessorConfigs(c.Request.Context(), accountID)
+	if err != nil {
+		if store.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Filter out the processor to delete
+	filtered := make([]models.AccountProcessorConfig, 0, len(configs))
+	for _, cfg := range configs {
+		if cfg.Type != processorType {
+			filtered = append(filtered, cfg)
+		}
+	}
+
+	err = h.store.UpdateAccountProcessorConfigs(c.Request.Context(), accountID, filtered)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "deleted", "type": processorType})
+}
+
 // ProcessorTypeInfo represents information about a processor type
 type ProcessorTypeInfo struct {
-	Type        string      `json:"type"`
-	Description string      `json:"description"`
-	MetaSchema  interface{} `json:"meta_schema"` // JSON schema for meta configuration
+	Type           string                 `json:"type"`
+	Description    string                 `json:"description"`
+	MetaSchema     map[string]interface{} `json:"meta_schema"` // JSON schema for meta configuration
+	DefaultConfig  map[string]interface{} `json:"default_config,omitempty"`
+	RequiresAPIKey bool                   `json:"requires_api_key"`
 }
 
 // getProcessorTypeInfo returns information about a processor type
@@ -218,9 +332,11 @@ func (h *ProcessorHandler) getProcessorTypeInfo(c *gin.Context) {
 
 	// Return type info with description and schema
 	c.JSON(http.StatusOK, ProcessorTypeInfo{
-		Type:        processorType,
-		Description: info.Description,
-		MetaSchema:  getMetaSchemaForProcessor(processorType),
+		Type:           processorType,
+		Description:    info.Description,
+		MetaSchema:     getMetaSchemaForProcessor(processorType).(map[string]interface{}),
+		DefaultConfig:  getDefaultConfigForProcessor(processorType),
+		RequiresAPIKey: processorType == "llm_processor", // LLM processor requires API key
 	})
 }
 
@@ -283,4 +399,46 @@ func getMetaSchemaForProcessor(processorType string) interface{} {
 		},
 	}
 	return schemas[processorType]
+}
+
+// getDefaultConfigForProcessor returns default configuration for a processor type
+func getDefaultConfigForProcessor(processorType string) map[string]interface{} {
+	configs := map[string]interface{}{
+		"link_tracker": map[string]interface{}{
+			"base_url":        "",
+			"salt":            "",
+			"track_only_html": false,
+			"ignore_domains":  []string{},
+		},
+		"message_summarizer": map[string]interface{}{
+			"max_length":        100,
+			"provider":          "local",
+			"model":             "",
+			"min_body_length":   50,
+			"skip_replies":      false,
+			"skip_short_emails": false,
+		},
+		"llm_processor": map[string]interface{}{
+			"system_prompt": "You are a helpful email assistant.",
+			"user_prompt":   "Analyze this email: {{body}}",
+			"provider":      "openai",
+			"model":         "gpt-3.5-turbo",
+			"api_key":       "",
+			"temperature":   0.7,
+			"max_tokens":    1024,
+		},
+		"spam_filter": map[string]interface{}{
+			"threshold":     0.8,
+			"action":        "tag",
+			"spam_folder":   "Spam",
+			"keywords":      []string{},
+			"whitelist":     []string{},
+			"blacklist":     []string{},
+			"abort_on_spam": false,
+		},
+	}
+	if config, ok := configs[processorType]; ok {
+		return config.(map[string]interface{})
+	}
+	return make(map[string]interface{})
 }

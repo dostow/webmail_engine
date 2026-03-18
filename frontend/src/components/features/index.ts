@@ -7,3 +7,4 @@ export { ComposeView } from './Compose';
 export { HealthView } from './Health';
 export { SettingsView } from './Settings';
 export { ServerCapabilitiesOverviewView } from './ServerCapabilitiesOverview';
+export { ProcessorManagementView } from './processors';

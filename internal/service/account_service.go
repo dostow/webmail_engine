@@ -425,6 +425,29 @@ func (s *AccountService) GetServerCapabilities(ctx context.Context, accountID st
 	return account.ServerCapabilities, nil
 }
 
+// GetServerCapabilitiesNoCache returns server capabilities without caching logic
+// Used internally to avoid circular calls
+func (s *AccountService) GetServerCapabilitiesNoCache(ctx context.Context, accountID string) (*models.ServerCapabilities, error) {
+	// Get account from store directly
+	account, err := s.store.GetByID(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	if account.ServerCapabilities == nil {
+		// No capabilities cached, detect them
+		return s.DetectServerCapabilities(ctx, accountID)
+	}
+
+	// Check if capabilities are stale (older than 7 days)
+	if time.Since(account.ServerCapabilities.LastChecked) > 7*24*time.Hour {
+		log.Printf("Server capabilities for account %s are stale, refreshing", accountID)
+		return s.DetectServerCapabilities(ctx, accountID)
+	}
+
+	return account.ServerCapabilities, nil
+}
+
 // GetAccount retrieves an account by ID (without sensitive data)
 func (s *AccountService) GetAccount(ctx context.Context, accountID string) (*models.Account, error) {
 	s.mu.RLock()
@@ -434,6 +457,13 @@ func (s *AccountService) GetAccount(ctx context.Context, accountID string) (*mod
 	cached, _ := s.cache.GetAccount(ctx, accountID)
 	if cached != nil {
 		// Cache already has stripped data
+		// Try to populate server capabilities
+		if cached.ServerCapabilities == nil {
+			caps, err := s.GetServerCapabilitiesNoCache(ctx, accountID)
+			if err == nil {
+				cached.ServerCapabilities = caps
+			}
+		}
 		return cached, nil
 	}
 
@@ -444,6 +474,14 @@ func (s *AccountService) GetAccount(ctx context.Context, accountID string) (*mod
 			return nil, models.ErrAccountNotFound
 		}
 		return nil, fmt.Errorf("failed to get account from store: %w", err)
+	}
+
+	// Populate server capabilities if not present
+	if account.ServerCapabilities == nil {
+		caps, err := s.GetServerCapabilitiesNoCache(ctx, accountID)
+		if err == nil {
+			account.ServerCapabilities = caps
+		}
 	}
 
 	// Cache the stripped version (not the full account)

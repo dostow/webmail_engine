@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/Button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
@@ -8,7 +8,7 @@ import * as api from '@/services/api';
 import { toast } from 'sonner';
 
 interface SyncSettingsDialogProps {
-  account: Account;
+  account: Account | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess?: () => void;
@@ -41,18 +41,35 @@ const HISTORICAL_SCOPE_OPTIONS = [
 export function SyncSettingsDialog({ account, open, onOpenChange, onSuccess }: SyncSettingsDialogProps) {
   const [loading, setLoading] = useState(false);
   const [settings, setSettings] = useState<SyncSettings>({
-    auto_sync: account.sync_settings.auto_sync,
-    sync_interval: account.sync_settings.sync_interval || 300,
-    historical_scope: account.sync_settings.historical_scope || 30,
-    include_spam: account.sync_settings.include_spam || false,
-    include_trash: account.sync_settings.include_trash || false,
-    max_message_size: account.sync_settings.max_message_size || 10485760,
-    attachment_handling: account.sync_settings.attachment_handling || 'inline',
-    sync_enabled: account.sync_settings.sync_enabled ?? account.sync_settings.auto_sync,
-    fair_use_policy: account.sync_settings.fair_use_policy,
+    auto_sync: true,
+    sync_interval: 300,
+    historical_scope: 30,
+    include_spam: false,
+    include_trash: false,
+    max_message_size: 10485760,
+    attachment_handling: 'inline',
+    sync_enabled: true,
+    fair_use_policy: { bucket_size: 100, refill_rate: 10 },
   });
 
+  useEffect(() => {
+    if (account?.sync_settings) {
+      setSettings({
+        auto_sync: account.sync_settings.auto_sync,
+        sync_interval: account.sync_settings.sync_interval || 300,
+        historical_scope: account.sync_settings.historical_scope || 30,
+        include_spam: account.sync_settings.include_spam || false,
+        include_trash: account.sync_settings.include_trash || false,
+        max_message_size: account.sync_settings.max_message_size || 10485760,
+        attachment_handling: account.sync_settings.attachment_handling || 'inline',
+        sync_enabled: account.sync_settings.sync_enabled ?? account.sync_settings.auto_sync,
+        fair_use_policy: account.sync_settings.fair_use_policy || { bucket_size: 100, refill_rate: 10 },
+      });
+    }
+  }, [account]);
+
   const handleSave = async () => {
+    if (!account) return;
     setLoading(true);
     try {
       await api.updateSyncSettings(account.id, settings);
@@ -68,6 +85,7 @@ export function SyncSettingsDialog({ account, open, onOpenChange, onSuccess }: S
   };
 
   const handleReset = () => {
+    if (!account?.sync_settings) return;
     setSettings({
       auto_sync: account.sync_settings.auto_sync,
       sync_interval: account.sync_settings.sync_interval || 300,
@@ -77,7 +95,7 @@ export function SyncSettingsDialog({ account, open, onOpenChange, onSuccess }: S
       max_message_size: account.sync_settings.max_message_size || 10485760,
       attachment_handling: account.sync_settings.attachment_handling || 'inline',
       sync_enabled: account.sync_settings.sync_enabled ?? account.sync_settings.auto_sync,
-      fair_use_policy: account.sync_settings.fair_use_policy,
+      fair_use_policy: account.sync_settings.fair_use_policy || { bucket_size: 100, refill_rate: 10 },
     });
   };
 
@@ -104,7 +122,7 @@ export function SyncSettingsDialog({ account, open, onOpenChange, onSuccess }: S
         <DialogHeader>
           <DialogTitle>Sync Settings</DialogTitle>
           <DialogDescription>
-            Configure how {account.email} synchronizes with the email server
+            Configure how {account?.email || 'this account'} synchronizes with the email server
           </DialogDescription>
         </DialogHeader>
 
@@ -121,14 +139,12 @@ export function SyncSettingsDialog({ account, open, onOpenChange, onSuccess }: S
                 role="switch"
                 aria-checked={settings.auto_sync}
                 onClick={() => setSettings(s => ({ ...s, auto_sync: !s.auto_sync, sync_enabled: !s.auto_sync }))}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
-                  settings.auto_sync ? 'bg-primary' : 'bg-muted'
-                }`}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${settings.auto_sync ? 'bg-primary' : 'bg-muted'
+                  }`}
               >
                 <span
-                  className={`pointer-events-none block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform ${
-                    settings.auto_sync ? 'translate-x-5' : 'translate-x-0'
-                  }`}
+                  className={`pointer-events-none block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform ${settings.auto_sync ? 'translate-x-5' : 'translate-x-0'
+                    }`}
                 />
               </button>
             </div>
@@ -188,9 +204,8 @@ export function SyncSettingsDialog({ account, open, onOpenChange, onSuccess }: S
                   role="checkbox"
                   aria-checked={settings.include_spam}
                   onClick={() => setSettings(s => ({ ...s, include_spam: !s.include_spam }))}
-                  className={`h-4 w-4 rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                    settings.include_spam ? 'bg-primary border-primary' : 'border-input'
-                  }`}
+                  className={`h-4 w-4 rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${settings.include_spam ? 'bg-primary border-primary' : 'border-input'
+                    }`}
                 >
                   {settings.include_spam && (
                     <svg className="h-4 w-4 text-primary-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -208,9 +223,8 @@ export function SyncSettingsDialog({ account, open, onOpenChange, onSuccess }: S
                   role="checkbox"
                   aria-checked={settings.include_trash}
                   onClick={() => setSettings(s => ({ ...s, include_trash: !s.include_trash }))}
-                  className={`h-4 w-4 rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                    settings.include_trash ? 'bg-primary border-primary' : 'border-input'
-                  }`}
+                  className={`h-4 w-4 rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${settings.include_trash ? 'bg-primary border-primary' : 'border-input'
+                    }`}
                 >
                   {settings.include_trash && (
                     <svg className="h-4 w-4 text-primary-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -251,8 +265,8 @@ export function SyncSettingsDialog({ account, open, onOpenChange, onSuccess }: S
               <span className="text-sm font-medium">Sync Status</span>
             </div>
             <div className="text-sm text-muted-foreground ml-7 space-y-1">
-              <p>Last sync: {account.last_sync_at ? new Date(account.last_sync_at).toLocaleString() : 'Never'}</p>
-              <p>Current status: <span className="font-medium capitalize">{account.status}</span></p>
+              <p>Last sync: {account?.last_sync_at ? new Date(account.last_sync_at).toLocaleString() : 'Never'}</p>
+              <p>Current status: <span className="font-medium capitalize">{account?.status || 'unknown'}</span></p>
             </div>
           </div>
         </div>

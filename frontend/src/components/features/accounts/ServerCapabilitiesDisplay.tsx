@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Button } from '@/components/ui/Button';
 import { getServerCapabilities, refreshServerCapabilities } from '@/services/api';
 import type { ServerCapabilities } from '@/types';
@@ -44,6 +44,13 @@ export function ServerCapabilitiesDisplay({ accountId, initialCapabilities }: Se
       setLoading(false);
     }
   }, [accountId]);
+
+  // Fetch on mount if no initial capabilities
+  useEffect(() => {
+    if (!initialCapabilities) {
+      fetchCapabilities();
+    }
+  }, [initialCapabilities, fetchCapabilities]);
 
   const handleRefresh = useCallback(async () => {
     try {
@@ -177,11 +184,10 @@ export function ServerCapabilitiesDisplay({ accountId, initialCapabilities }: Se
                 return (
                   <div
                     key={item.key}
-                    className={`p-2 rounded text-xs ${
-                      value === true
-                        ? 'bg-green-50 border border-green-200'
-                        : 'bg-gray-50 border border-gray-200 opacity-60'
-                    }`}
+                    className={`p-2 rounded text-xs ${value === true
+                      ? 'bg-green-50 border border-green-200'
+                      : 'bg-gray-50 border border-gray-200 opacity-60'
+                      }`}
                   >
                     <div className="flex items-center gap-1.5 font-medium">
                       {value === true ? (

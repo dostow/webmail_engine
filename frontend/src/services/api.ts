@@ -17,6 +17,7 @@ import type {
 import { useAppStore } from '../store/useAppStore';
 
 const getApiBaseUrl = () => useAppStore.getState().apiUrl || import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+export { getApiBaseUrl };
 
 class ApiError extends Error {
   code: string;
@@ -209,4 +210,14 @@ export async function updateSyncSettings(
     body: JSON.stringify(syncSettings),
   });
   return handleResponse<Account>(response);
+}
+
+export async function getAccountFolders(accountId: string): Promise<import('@/types').FolderSyncInfo[]> {
+  const response = await fetch(`${getApiBaseUrl()}/v1/accounts/${accountId}/folders`);
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to load folders');
+  }
+  const data = await response.json();
+  return data.folders;
 }

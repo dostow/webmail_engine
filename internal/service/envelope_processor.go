@@ -10,21 +10,23 @@ import (
 	"webmail_engine/internal/envelopequeue"
 	"webmail_engine/internal/models"
 	"webmail_engine/internal/pool"
+	"webmail_engine/internal/processor"
 )
 
 // EnvelopeProcessor processes email envelopes from the queue
 // It fetches full message content, extracts metadata, and updates the cache
 type EnvelopeProcessor struct {
-	mu             sync.RWMutex
-	queue          envelopequeue.EnvelopeQueue
-	messageService *MessageService
-	accountService *AccountService
-	sessions       *pool.IMAPSessionPool
-	config         *EnvelopeProcessorConfig
-	workerCtx      context.Context
-	workerCancel   context.CancelFunc
-	isRunning      bool
-	stats          ProcessorStats
+	mu                sync.RWMutex
+	queue             envelopequeue.EnvelopeQueue
+	messageService    *MessageService
+	accountService    *AccountService
+	sessions          *pool.IMAPSessionPool
+	config            *EnvelopeProcessorConfig
+	workerCtx         context.Context
+	workerCancel      context.CancelFunc
+	isRunning         bool
+	stats             ProcessorStats
+	processorManagers sync.Map // map[accountID]*processor.AccountProcessorManager
 }
 
 // EnvelopeProcessorConfig holds processor configuration
@@ -341,6 +343,15 @@ func (p *EnvelopeProcessor) executeProcessing(envelope *models.EnvelopeQueueItem
 
 	fetchedEnvelope := envelopes[0]
 
+	// Convert to processor email format and run through processor pipeline
+	procEmail := p.convertToProcessorEmail(envelope, &fetchedEnvelope, account.ID)
+
+	// Run through processor pipeline
+	if err := p.processWithProcessors(p.workerCtx, envelope.AccountID, procEmail); err != nil {
+		log.Printf("Processor pipeline error for envelope %s: %v", envelope.ID, err)
+		// Continue with storage even if processors fail
+	}
+
 	// Process the full message
 	// This would integrate with message service to:
 	// 1. Store message in cache
@@ -487,6 +498,107 @@ func generateThreadID(messageID string, references []string) string {
 	}
 	// Generate a new thread ID
 	return fmt.Sprintf("thread_%d", time.Now().UnixNano())
+}
+
+// processWithProcessors runs the email through the account's processor pipeline
+func (p *EnvelopeProcessor) processWithProcessors(ctx context.Context, accountID string, email *processor.Email) error {
+	// Get or create processor manager for account
+	manager, err := p.getProcessorManager(accountID)
+	if err != nil {
+		return fmt.Errorf("failed to get processor manager: %w", err)
+	}
+
+	// Execute processor pipeline
+	results, err := manager.ProcessEmail(ctx, email)
+	if err != nil {
+		return fmt.Errorf("processor pipeline failed: %w", err)
+	}
+
+	// Log results
+	for _, result := range results {
+		if !result.Success {
+			log.Printf("Processor %s failed for account %s: %s",
+				result.ProcessorType, accountID, result.Error)
+		}
+	}
+
+	return nil
+}
+
+// getProcessorManager retrieves or creates a processor manager for an account
+func (p *EnvelopeProcessor) getProcessorManager(accountID string) (*processor.AccountProcessorManager, error) {
+	// Check cache
+	if cached, ok := p.processorManagers.Load(accountID); ok {
+		return cached.(*processor.AccountProcessorManager), nil
+	}
+
+	// Load processor configs from account
+	configs, err := p.accountService.store.GetAccountProcessorConfigs(context.Background(), accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load processor configs: %w", err)
+	}
+
+	// Convert to manager configs
+	managerConfigs := make([]processor.AccountProcessorConfig, len(configs))
+	for i, cfg := range configs {
+		managerConfigs[i] = processor.AccountProcessorConfig{
+			Type:     cfg.Type,
+			Meta:     processor.ProcessorMeta(cfg.Meta),
+			Enabled:  cfg.Enabled,
+			Priority: cfg.Priority,
+		}
+	}
+
+	// Create manager
+	manager, err := processor.NewAccountProcessorManager(processor.AccountProcessorManagerConfig{
+		AccountID: accountID,
+		Configs:   managerConfigs,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache manager
+	p.processorManagers.Store(accountID, manager)
+	return manager, nil
+}
+
+// InvalidateProcessorManager clears cached processor manager (call when configs change)
+func (p *EnvelopeProcessor) InvalidateProcessorManager(accountID string) {
+	p.processorManagers.Delete(accountID)
+}
+
+// convertToProcessorEmail converts models.EnvelopeQueueItem to processor.Email
+func (p *EnvelopeProcessor) convertToProcessorEmail(envelope *models.EnvelopeQueueItem, fetched *pool.MessageEnvelope, accountID string) *processor.Email {
+	from := ""
+	if len(fetched.From) > 0 {
+		from = fetched.From[0].Address
+	}
+
+	to := make([]string, len(fetched.To))
+	for i, t := range fetched.To {
+		to[i] = t.Address
+	}
+
+	return &processor.Email{
+		ID:         envelope.ID,
+		AccountID:  accountID,
+		FolderName: envelope.FolderName,
+		UID:        envelope.UID,
+		MessageID:  fetched.MessageID,
+		Subject:    fetched.Subject,
+		From:       from,
+		To:         to,
+		Flags:      fetched.Flags,
+		Date:       fetched.Date,
+		Size:       fetched.Size,
+		// Note: Body would be fetched separately if needed by processors
+		Body: &processor.EmailBody{
+			Text:      "",
+			HTML:      "",
+			PlainText: "",
+		},
+	}
 }
 
 func convertContacts(contacts []models.Contact) []models.Contact {

@@ -505,5 +505,80 @@ func (s *MemoryMessageStore) GetSentMessages(accountID string, limit, offset int
 	return messages, total, nil
 }
 
+// GetAccountProcessorConfigs retrieves processor configs for an account
+func (s *MemoryStore) GetAccountProcessorConfigs(ctx context.Context, accountID string) ([]models.AccountProcessorConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, ErrStoreUnavailable
+	}
+
+	account, exists := s.accounts[accountID]
+	if !exists {
+		return nil, ErrNotFound
+	}
+
+	if account.ProcessorConfigs == nil {
+		return []models.AccountProcessorConfig{}, nil
+	}
+
+	// Return a copy
+	configs := make([]models.AccountProcessorConfig, len(account.ProcessorConfigs))
+	copy(configs, account.ProcessorConfigs)
+	return configs, nil
+}
+
+// UpdateAccountProcessorConfigs updates processor configs for an account
+func (s *MemoryStore) UpdateAccountProcessorConfigs(ctx context.Context, accountID string, configs []models.AccountProcessorConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return ErrStoreUnavailable
+	}
+
+	account, exists := s.accounts[accountID]
+	if !exists {
+		return ErrNotFound
+	}
+
+	// Store a copy
+	account.ProcessorConfigs = make([]models.AccountProcessorConfig, len(configs))
+	copy(account.ProcessorConfigs, configs)
+
+	return nil
+}
+
+// EnableAccountProcessor enables/disables a specific processor type
+func (s *MemoryStore) EnableAccountProcessor(ctx context.Context, accountID, processorType string, enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return ErrStoreUnavailable
+	}
+
+	account, exists := s.accounts[accountID]
+	if !exists {
+		return ErrNotFound
+	}
+
+	found := false
+	for i := range account.ProcessorConfigs {
+		if account.ProcessorConfigs[i].Type == processorType {
+			account.ProcessorConfigs[i].Enabled = enabled
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
 // Ensure MemoryStore implements AccountStore interface
 var _ AccountStore = (*MemoryStore)(nil)

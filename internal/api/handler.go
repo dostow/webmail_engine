@@ -8,6 +8,7 @@ import (
 
 	"webmail_engine/internal/models"
 	"webmail_engine/internal/service"
+	"webmail_engine/internal/store"
 
 	"github.com/gin-gonic/gin"
 )
@@ -17,6 +18,7 @@ type APIHandler struct {
 	accountService *service.AccountService
 	messageService *service.MessageService
 	sendService    *service.SendService
+	store          store.AccountStore
 }
 
 // accountStatusMiddleware checks if an account is disabled and returns an error if so
@@ -60,11 +62,13 @@ func NewAPIHandler(
 	accountService *service.AccountService,
 	messageService *service.MessageService,
 	sendService *service.SendService,
+	store store.AccountStore,
 ) *APIHandler {
 	return &APIHandler{
 		accountService: accountService,
 		messageService: messageService,
 		sendService:    sendService,
+		store:          store,
 	}
 }
 
@@ -90,6 +94,11 @@ func (h *APIHandler) RegisterRoutes(router *gin.Engine) {
 		accountRoutes.POST("/search", h.searchMessages)
 		accountRoutes.POST("/send", h.sendMessage)
 	}
+
+	// Processor routes
+	processorHandler := NewProcessorHandler(h.accountService, h.store)
+	processorRoutes := router.Group("/v1")
+	processorHandler.RegisterRoutes(processorRoutes)
 
 	// Health routes (no middleware - should work even for disabled accounts)
 	router.GET("/v1/health", h.getSystemHealth)

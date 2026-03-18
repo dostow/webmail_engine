@@ -72,7 +72,7 @@ type AccountStore interface {
 
 	// Health checks if the store is operational
 	Health(ctx context.Context) *HealthStatus
-	
+
 	// CreateAuditLog stores a new audit log entry
 	CreateAuditLog(ctx context.Context, log *models.AuditLog) error
 
@@ -84,4 +84,9 @@ type AccountStore interface {
 	UpsertFolderSyncState(ctx context.Context, state *models.FolderSyncState) error
 	DeleteFolderSyncState(ctx context.Context, accountID, folderName string) error
 	ListFolderSyncStates(ctx context.Context, accountID string) ([]*models.FolderSyncState, error)
+
+	// ProcessorConfig operations for managing account processor configurations
+	GetAccountProcessorConfigs(ctx context.Context, accountID string) ([]models.AccountProcessorConfig, error)
+	UpdateAccountProcessorConfigs(ctx context.Context, accountID string, configs []models.AccountProcessorConfig) error
+	EnableAccountProcessor(ctx context.Context, accountID, processorType string, enabled bool) error
 }

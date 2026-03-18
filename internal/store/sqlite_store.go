@@ -18,27 +18,28 @@ import (
 
 // accountDB is the GORM model for account persistence
 type accountDB struct {
-	ID              string          `gorm:"primaryKey;type:text;not null"`
-	Email           string          `gorm:"uniqueIndex;type:text;not null"`
-	AuthType        string          `gorm:"type:text;not null"`
-	Status          string          `gorm:"type:text;not null"`
-	IMAPHost        string          `gorm:"column:imap_host;type:text;not null"`
-	IMAPPort        int             `gorm:"column:imap_port;not null"`
-	IMAPEncryption  string          `gorm:"column:imap_encryption;type:text;not null"`
-	IMAPUsername    string          `gorm:"column:imap_username;type:text;not null"`
-	IMAPPassword    string          `gorm:"column:imap_password;type:text;not null"`
-	SMTPHost        string          `gorm:"column:smtp_host;type:text;not null"`
-	SMTPPort        int             `gorm:"column:smtp_port;not null"`
-	SMTPEncryption  string          `gorm:"column:smtp_encryption;type:text;not null"`
-	SMTPUsername    string          `gorm:"column:smtp_username;type:text;not null"`
-	SMTPPassword    string          `gorm:"column:smtp_password;type:text;not null"`
-	ConnectionLimit int             `gorm:"column:connection_limit;not null"`
-	SyncSettings    json.RawMessage `gorm:"column:sync_settings;type:text;not null"`
-	ProxyConfig     json.RawMessage `gorm:"column:proxy_config;type:text"`
-	FairUsePolicy   json.RawMessage `gorm:"column:fair_use_policy;type:text"`
-	CreatedAt       time.Time       `gorm:"column:created_at;not null"`
-	UpdatedAt       time.Time       `gorm:"column:updated_at;not null"`
-	LastSyncAt      *time.Time      `gorm:"column:last_sync_at"`
+	ID               string          `gorm:"primaryKey;type:text;not null"`
+	Email            string          `gorm:"uniqueIndex;type:text;not null"`
+	AuthType         string          `gorm:"type:text;not null"`
+	Status           string          `gorm:"type:text;not null"`
+	IMAPHost         string          `gorm:"column:imap_host;type:text;not null"`
+	IMAPPort         int             `gorm:"column:imap_port;not null"`
+	IMAPEncryption   string          `gorm:"column:imap_encryption;type:text;not null"`
+	IMAPUsername     string          `gorm:"column:imap_username;type:text;not null"`
+	IMAPPassword     string          `gorm:"column:imap_password;type:text;not null"`
+	SMTPHost         string          `gorm:"column:smtp_host;type:text;not null"`
+	SMTPPort         int             `gorm:"column:smtp_port;not null"`
+	SMTPEncryption   string          `gorm:"column:smtp_encryption;type:text;not null"`
+	SMTPUsername     string          `gorm:"column:smtp_username;type:text;not null"`
+	SMTPPassword     string          `gorm:"column:smtp_password;type:text;not null"`
+	ConnectionLimit  int             `gorm:"column:connection_limit;not null"`
+	SyncSettings     json.RawMessage `gorm:"column:sync_settings;type:text;not null"`
+	ProxyConfig      json.RawMessage `gorm:"column:proxy_config;type:text"`
+	FairUsePolicy    json.RawMessage `gorm:"column:fair_use_policy;type:text"`
+	ProcessorConfigs json.RawMessage `gorm:"column:processor_configs;type:text"`
+	CreatedAt        time.Time       `gorm:"column:created_at;not null"`
+	UpdatedAt        time.Time       `gorm:"column:updated_at;not null"`
+	LastSyncAt       *time.Time      `gorm:"column:last_sync_at"`
 }
 
 // TableName specifies the table name
@@ -154,6 +155,13 @@ func (a *accountDB) toAccount() (*models.Account, error) {
 		acc.FairUsePolicy = &fairUsePolicy
 	}
 
+	// Parse ProcessorConfigs
+	if len(a.ProcessorConfigs) > 0 {
+		if err := json.Unmarshal(a.ProcessorConfigs, &acc.ProcessorConfigs); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal processor configs: %w", err)
+		}
+	}
+
 	return acc, nil
 }
 
@@ -205,6 +213,17 @@ func (a *accountDB) fromAccount(acc *models.Account) error {
 		a.FairUsePolicy = fairUsePolicyJSON
 	} else {
 		a.FairUsePolicy = nil
+	}
+
+	// Marshal ProcessorConfigs
+	if len(acc.ProcessorConfigs) > 0 {
+		processorConfigsJSON, err := json.Marshal(acc.ProcessorConfigs)
+		if err != nil {
+			return fmt.Errorf("failed to marshal processor configs: %w", err)
+		}
+		a.ProcessorConfigs = processorConfigsJSON
+	} else {
+		a.ProcessorConfigs = nil
 	}
 
 	return nil
@@ -746,6 +765,93 @@ func (s *SQLiteStore) ListFolderSyncStates(ctx context.Context, accountID string
 	}
 
 	return states, nil
+}
+
+// GetAccountProcessorConfigs retrieves processor configs for an account
+func (s *SQLiteStore) GetAccountProcessorConfigs(ctx context.Context, accountID string) ([]models.AccountProcessorConfig, error) {
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return nil, ErrStoreUnavailable
+	}
+	s.mu.RUnlock()
+
+	var acc accountDB
+	if err := s.db.WithContext(ctx).Where("id = ?", accountID).First(&acc).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to get account processor configs: %w", err)
+	}
+
+	if len(acc.ProcessorConfigs) == 0 {
+		return []models.AccountProcessorConfig{}, nil
+	}
+
+	var configs []models.AccountProcessorConfig
+	if err := json.Unmarshal(acc.ProcessorConfigs, &configs); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal processor configs: %w", err)
+	}
+
+	return configs, nil
+}
+
+// UpdateAccountProcessorConfigs updates processor configs for an account
+func (s *SQLiteStore) UpdateAccountProcessorConfigs(ctx context.Context, accountID string, configs []models.AccountProcessorConfig) error {
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return ErrStoreUnavailable
+	}
+	s.mu.RUnlock()
+
+	configsJSON, err := json.Marshal(configs)
+	if err != nil {
+		return fmt.Errorf("failed to marshal processor configs: %w", err)
+	}
+
+	result := s.db.WithContext(ctx).Model(&accountDB{}).Where("id = ?", accountID).Update("processor_configs", configsJSON)
+	if result.Error != nil {
+		return fmt.Errorf("failed to update processor configs: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+// EnableAccountProcessor enables/disables a specific processor type
+func (s *SQLiteStore) EnableAccountProcessor(ctx context.Context, accountID, processorType string, enabled bool) error {
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return ErrStoreUnavailable
+	}
+	s.mu.RUnlock()
+
+	// Get current configs
+	configs, err := s.GetAccountProcessorConfigs(ctx, accountID)
+	if err != nil {
+		return err
+	}
+
+	// Find and update the processor config
+	found := false
+	for i := range configs {
+		if configs[i].Type == processorType {
+			configs[i].Enabled = enabled
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("processor type %s not found for account %s", processorType, accountID)
+	}
+
+	// Save updated configs
+	return s.UpdateAccountProcessorConfigs(ctx, accountID, configs)
 }
 
 // GetStats returns store statistics

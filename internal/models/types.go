@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 )
 
@@ -13,6 +14,14 @@ type AuditLog struct {
 	Details   string    `json:"details"`
 	Timestamp time.Time `json:"timestamp"`
 	IP        string    `json:"ip"`
+}
+
+// AccountProcessorConfig defines a processor enabled for a specific sync account
+type AccountProcessorConfig struct {
+	Type     string          `json:"type"`     // e.g., "llm_processor", "link_tracker"
+	Meta     json.RawMessage `json:"meta"`     // Type-specific configuration (JSON)
+	Enabled  bool            `json:"enabled"`  // Whether processor is active
+	Priority int             `json:"priority"` // Execution order (lower = earlier)
 }
 
 // AccountStatus represents the current state of an email account
@@ -121,20 +130,21 @@ const (
 
 // Account represents an email account configuration
 type Account struct {
-	ID                 string              `json:"id"`
-	Email              string              `json:"email"`
-	AuthType           AuthType            `json:"auth_type"`
-	Status             AccountStatus       `json:"status"`
-	CreatedAt          time.Time           `json:"created_at"`
-	UpdatedAt          time.Time           `json:"updated_at"`
-	LastSyncAt         *time.Time          `json:"last_sync_at,omitempty"`
-	IMAPConfig         ServerConfig        `json:"imap_config"`
-	SMTPConfig         ServerConfig        `json:"smtp_config"`
-	ProxyConfig        *ProxySettings      `json:"proxy_config,omitempty"`
-	FairUsePolicy      *FairUsePolicy      `json:"fair_use_policy,omitempty"`
-	ConnectionLimit    int                 `json:"connection_limit"`
-	SyncSettings       SyncSettings        `json:"sync_settings"`
-	ServerCapabilities *ServerCapabilities `json:"server_capabilities,omitempty"`
+	ID                 string                   `json:"id"`
+	Email              string                   `json:"email"`
+	AuthType           AuthType                 `json:"auth_type"`
+	Status             AccountStatus            `json:"status"`
+	CreatedAt          time.Time                `json:"created_at"`
+	UpdatedAt          time.Time                `json:"updated_at"`
+	LastSyncAt         *time.Time               `json:"last_sync_at,omitempty"`
+	IMAPConfig         ServerConfig             `json:"imap_config"`
+	SMTPConfig         ServerConfig             `json:"smtp_config"`
+	ProxyConfig        *ProxySettings           `json:"proxy_config,omitempty"`
+	FairUsePolicy      *FairUsePolicy           `json:"fair_use_policy,omitempty"`
+	ConnectionLimit    int                      `json:"connection_limit"`
+	SyncSettings       SyncSettings             `json:"sync_settings"`
+	ServerCapabilities *ServerCapabilities      `json:"server_capabilities,omitempty"`
+	ProcessorConfigs   []AccountProcessorConfig `json:"processor_configs,omitempty"`
 }
 
 // ServerCapabilities represents IMAP server capabilities

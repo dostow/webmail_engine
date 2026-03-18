@@ -218,7 +218,7 @@ func main() {
 	go webhookHandler.StartCleanup(webhookCtx, cfg.Webhook.CleanupInterval, cfg.Webhook.EventRetention)
 
 	// Initialize API handler
-	apiHandler := api.NewAPIHandler(accountService, messageService, sendService)
+	apiHandler := api.NewAPIHandler(accountService, messageService, sendService, accountStore)
 
 	// Create Gin router
 	router := gin.New()

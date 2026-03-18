@@ -234,21 +234,51 @@ func (s *MessageService) GetMessageList(
 
 		// Cache miss or refresh needed - fetch from IMAP
 		log.Printf("UID cache miss for folder %s, fetching from IMAP", folder)
-		allUIDs, err = client.Search("ALL")
-		if err != nil {
-			log.Printf("IMAP search failed: %v", err)
-			return nil, fmt.Errorf("search failed: %w", err)
+
+		// Use server-side SORT if available (RFC 5256)
+		if client.HasSort() {
+			log.Printf("Using server-side SORT: sortBy=%s, sortOrder=%s", sortBy, sortOrder)
+			allUIDs, err = client.SortMessages(sortBy, sortOrder, "ALL")
+			if err != nil {
+				log.Printf("Server SORT failed: %v, falling back to SEARCH", err)
+				allUIDs, err = client.Search("ALL")
+				if err != nil {
+					log.Printf("IMAP search failed: %v", err)
+					return nil, fmt.Errorf("search failed: %w", err)
+				}
+			}
+		} else {
+			allUIDs, err = client.Search("ALL")
+			if err != nil {
+				log.Printf("IMAP search failed: %v", err)
+				return nil, fmt.Errorf("search failed: %w", err)
+			}
 		}
+
 		// Cache the UID list with metadata for 5 minutes
 		if err := s.setCachedUIDListWithMetadata(ctx, uidCacheKey, allUIDs, len(allUIDs), currentModSeq, client.HasQResync(), 5*time.Minute); err != nil {
 			log.Printf("Warning: failed to cache UID list: %v", err)
 		}
 	} else {
 		// No cache available - fetch from IMAP
-		allUIDs, err = client.Search("ALL")
-		if err != nil {
-			log.Printf("IMAP search failed: %v", err)
-			return nil, fmt.Errorf("search failed: %w", err)
+		// Use server-side SORT if available
+		if client.HasSort() {
+			log.Printf("Using server-side SORT: sortBy=%s, sortOrder=%s", sortBy, sortOrder)
+			allUIDs, err = client.SortMessages(sortBy, sortOrder, "ALL")
+			if err != nil {
+				log.Printf("Server SORT failed: %v, falling back to SEARCH", err)
+				allUIDs, err = client.Search("ALL")
+				if err != nil {
+					log.Printf("IMAP search failed: %v", err)
+					return nil, fmt.Errorf("search failed: %w", err)
+				}
+			}
+		} else {
+			allUIDs, err = client.Search("ALL")
+			if err != nil {
+				log.Printf("IMAP search failed: %v", err)
+				return nil, fmt.Errorf("search failed: %w", err)
+			}
 		}
 	}
 
@@ -258,21 +288,50 @@ UseUIDs:
 
 	log.Printf("Found %d messages in folder %s, page=%d, limit=%d", totalCount, folder, cursorData.Page, limit)
 
-	// Sort UIDs based on sort order (IMAP returns UIDs in ascending order)
+	// When using server-side SORT, UIDs are already sorted
+	// For client-side sorting or no SORT support, we need to reverse for descending order
 	var uids []uint32
-	if sortOrder == models.SortOrderDesc {
+	if client.HasSort() {
+		// Server already sorted, use as-is
+		uids = allUIDs
+		log.Printf("Using server-sorted UIDs (first: %v, last: %v)",
+			func() uint32 {
+				if len(uids) > 0 {
+					return uids[0]
+				}
+				return 0
+			}(),
+			func() uint32 {
+				if len(uids) > 0 {
+					return uids[len(uids)-1]
+				}
+				return 0
+			}(),
+		)
+	} else if sortOrder == models.SortOrderDesc {
 		// Reverse for descending order (newest first)
-		uids = make([]uint32, 0, len(allUIDs))  // Pre-allocate capacity, not length
+		uids = make([]uint32, 0, len(allUIDs))
 		for i := len(allUIDs) - 1; i >= 0; i-- {
 			uids = append(uids, allUIDs[i])
 		}
+		log.Printf("Reversed UIDs for client-side descending sort")
 	} else {
 		uids = allUIDs
 	}
 
 	log.Printf("UIDs prepared: %d items (first: %v, last: %v)", len(uids),
-		func() uint32 { if len(uids) > 0 { return uids[0] }; return 0 }(),
-		func() uint32 { if len(uids) > 0 { return uids[len(uids)-1] }; return 0 }(),
+		func() uint32 {
+			if len(uids) > 0 {
+				return uids[0]
+			}
+			return 0
+		}(),
+		func() uint32 {
+			if len(uids) > 0 {
+				return uids[len(uids)-1]
+			}
+			return 0
+		}(),
 	)
 
 	// Phase 3: Validate cursor anchor UID
@@ -333,8 +392,12 @@ UseUIDs:
 	}
 
 	// Fetch messages in batches to avoid IMAP command length limits
+	// Important: Preserve the sorted order of UIDs when fetching
 	var allEnvelopes []pool.MessageEnvelope
 	if len(pageUIDs) > 0 {
+		// Create a map to store envelopes by UID for reordering
+		envelopeMap := make(map[uint32]pool.MessageEnvelope)
+
 		for i := 0; i < len(pageUIDs); i += maxUIDsPerFetch {
 			batchEnd := i + maxUIDsPerFetch
 			if batchEnd > len(pageUIDs) {
@@ -342,7 +405,7 @@ UseUIDs:
 			}
 			batch := pageUIDs[i:batchEnd]
 
-			// IMAP FETCH requires UIDs in ascending order, sort the batch
+			// IMAP FETCH requires UIDs in ascending order, sort the batch for fetching
 			sortedBatch := make([]uint32, len(batch))
 			copy(sortedBatch, batch)
 			sort.Slice(sortedBatch, func(a, b int) bool { return sortedBatch[a] < sortedBatch[b] })
@@ -354,7 +417,18 @@ UseUIDs:
 				continue
 			}
 			log.Printf("Batch fetched: %d envelopes", len(batchEnvelopes))
-			allEnvelopes = append(allEnvelopes, batchEnvelopes...)
+
+			// Store envelopes in map by UID
+			for _, env := range batchEnvelopes {
+				envelopeMap[env.UID] = env
+			}
+		}
+
+		// Reconstruct envelopes in the original sorted order (from pageUIDs)
+		for _, uid := range pageUIDs {
+			if env, ok := envelopeMap[uid]; ok {
+				allEnvelopes = append(allEnvelopes, env)
+			}
 		}
 	}
 
@@ -363,11 +437,31 @@ UseUIDs:
 	// Convert to MessageSummary
 	messages := s.convertToMessageSummary(allEnvelopes, folder)
 
-	// Always apply client-side sort to ensure correct order
-	// (IMAP fetch returns in UID order, but we need to respect sortBy/sortOrder)
-	log.Printf("Before sort: first message date=%s", func() string { if len(messages) > 0 { return messages[0].Date.String() }; return "N/A" }())
-	messages = s.sortMessages(messages, sortBy, sortOrder)
-	log.Printf("After sort: first message date=%s, last=%s", func() string { if len(messages) > 0 { return messages[0].Date.String() }; return "N/A" }(), func() string { if len(messages) > 0 { return messages[len(messages)-1].Date.String() }; return "N/A" }())
+	// Apply client-side sort only if server-side SORT is not available
+	// When using server-side SORT, messages are already in correct order
+	if !client.HasSort() {
+		log.Printf("Applying client-side sort: sortBy=%s, sortOrder=%s", sortBy, sortOrder)
+		log.Printf("Before sort: first message date=%s", func() string {
+			if len(messages) > 0 {
+				return messages[0].Date.String()
+			}
+			return "N/A"
+		}())
+		messages = s.sortMessages(messages, sortBy, sortOrder)
+		log.Printf("After sort: first message date=%s, last=%s", func() string {
+			if len(messages) > 0 {
+				return messages[0].Date.String()
+			}
+			return "N/A"
+		}(), func() string {
+			if len(messages) > 0 {
+				return messages[len(messages)-1].Date.String()
+			}
+			return "N/A"
+		}())
+	} else {
+		log.Printf("Server-side SORT used, skipping client-side sort")
+	}
 
 	// Preload first 3 and last 3 message envelopes for instant display
 	// This ensures content is ready regardless of scroll position after sort
@@ -1847,11 +1941,11 @@ func (s *MessageService) preloadStrategicMessages(ctx context.Context, accountID
 
 // CursorData represents pagination cursor data for stable navigation
 type CursorData struct {
-	Page      int                 `json:"page"`
-	LastUID   uint32              `json:"last_uid,omitempty"` // Last UID from previous page for stable pagination
-	SortBy    models.SortField    `json:"sort_by"`
-	SortOrder models.SortOrder    `json:"sort_order"`
-	Timestamp time.Time           `json:"timestamp"`
+	Page      int              `json:"page"`
+	LastUID   uint32           `json:"last_uid,omitempty"` // Last UID from previous page for stable pagination
+	SortBy    models.SortField `json:"sort_by"`
+	SortOrder models.SortOrder `json:"sort_order"`
+	Timestamp time.Time        `json:"timestamp"`
 }
 
 // LegacyCursorData represents the old cursor format (for backward compatibility)
@@ -2022,4 +2116,3 @@ func buildUIDSet(uids []uint32) string {
 func (s *MessageService) GetPoolStats() pool.SessionPoolStats {
 	return s.sessions.Stats()
 }
-

@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -18,35 +19,36 @@ import (
 
 // IMAPClient represents an IMAP client connection
 type IMAPClient struct {
-	conn       *Connection
-	mu         sync.Mutex
-	seqNum     uint32
-	capabilities []string
+	conn           *Connection
+	mu             sync.Mutex
+	seqNum         uint32
+	capabilities   []string
 	selectedFolder string
-	uidValidity  uint32
-	highestModSeq uint64
+	uidValidity    uint32
+	highestModSeq  uint64
+	qresyncEnabled bool
 }
 
 // IMAPConfig represents IMAP server configuration
 type IMAPConfig struct {
-	Host       string
-	Port       int
-	Username   string
-	Password   string
-	Encryption models.EncryptionType
+	Host        string
+	Port        int
+	Username    string
+	Password    string
+	Encryption  models.EncryptionType
 	ProxyConfig *models.ProxySettings
 }
 
 // FolderInfo represents IMAP folder information
 type FolderInfo struct {
-	Name        string
-	Delimiter   string
-	Attributes  []string
-	Messages    int
-	Recent      int
-	Unseen      int
-	UIDNext     uint32
-	UIDValidity uint32
+	Name          string
+	Delimiter     string
+	Attributes    []string
+	Messages      int
+	Recent        int
+	Unseen        int
+	UIDNext       uint32
+	UIDValidity   uint32
 	HighestModSeq uint64
 }
 
@@ -60,15 +62,15 @@ type FolderStatus struct {
 
 // MessageEnvelope represents IMAP message envelope
 type MessageEnvelope struct {
-	UID         uint32
-	Flags       []string
+	UID          uint32
+	Flags        []string
 	InternalDate time.Time
-	From        []models.Contact
-	To          []models.Contact
-	Subject     string
-	Date        time.Time
-	MessageID   string
-	Size        int64
+	From         []models.Contact
+	To           []models.Contact
+	Subject      string
+	Date         time.Time
+	MessageID    string
+	Size         int64
 }
 
 // NewIMAPClient creates a new IMAP client
@@ -82,15 +84,15 @@ func NewIMAPClient(conn *Connection) *IMAPClient {
 func ConnectIMAP(ctx context.Context, config IMAPConfig) (*IMAPClient, error) {
 	// Create server config
 	host := fmt.Sprintf("%s:%d", config.Host, config.Port)
-	
+
 	var dialer net.Dialer
 	dialer.Timeout = 30 * time.Second
-	
+
 	netConn, err := dialer.DialContext(ctx, "tcp", host)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to IMAP server: %w", err)
 	}
-	
+
 	var tlsConn *tls.Conn
 	if config.Encryption == models.EncryptionSSL || config.Encryption == models.EncryptionTLS {
 		tlsConfig := &tls.Config{
@@ -103,7 +105,7 @@ func ConnectIMAP(ctx context.Context, config IMAPConfig) (*IMAPClient, error) {
 			return nil, fmt.Errorf("TLS handshake failed: %w", err)
 		}
 	}
-	
+
 	conn := &Connection{
 		ID:         fmt.Sprintf("imap-%d", time.Now().UnixNano()),
 		AccountID:  config.Username,
@@ -114,23 +116,37 @@ func ConnectIMAP(ctx context.Context, config IMAPConfig) (*IMAPClient, error) {
 		LastUsedAt: time.Now(),
 		InUse:      true,
 	}
-	
+
 	client := &IMAPClient{
 		conn: conn,
 	}
-	
+
 	// Read greeting
 	if err := client.readGreeting(); err != nil {
 		conn.Close()
 		return nil, err
 	}
-	
+
 	// Authenticate
 	if err := client.authenticate(config.Username, config.Password); err != nil {
 		conn.Close()
 		return nil, err
 	}
-	
+
+	// Refresh capabilities after authentication
+	if err := client.refreshCapabilities(); err != nil {
+		log.Printf("Warning: failed to refresh capabilities: %v", err)
+	}
+
+	// Enable QRESYNC if supported (must be done before SELECT/EXAMINE)
+	if client.HasQResync() {
+		if err := client.EnableQResync(); err != nil {
+			log.Printf("Warning: failed to enable QRESYNC: %v", err)
+		} else {
+			log.Printf("QRESYNC enabled successfully")
+		}
+	}
+
 	return client, nil
 }
 
@@ -169,6 +185,62 @@ func (c *IMAPClient) HasCondStore() bool {
 	return false
 }
 
+// HasSort checks if the server supports SORT extension
+func (c *IMAPClient) HasSort() bool {
+	for _, cap := range c.capabilities {
+		if strings.EqualFold(cap, "SORT") {
+			return true
+		}
+	}
+	return false
+}
+
+// HasSearchRes checks if the server supports SEARCHRES extension
+func (c *IMAPClient) HasSearchRes() bool {
+	for _, cap := range c.capabilities {
+		if strings.EqualFold(cap, "SEARCHRES") {
+			return true
+		}
+	}
+	return false
+}
+
+// IsQResyncEnabled returns true if QRESYNC has been enabled for this session
+func (c *IMAPClient) IsQResyncEnabled() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.qresyncEnabled
+}
+
+// EnableQResync sends the ENABLE QRESYNC command to the server
+// Must be called after authentication and before SELECT/EXAMINE
+// Returns nil if server doesn't support QRESYNC (no-op)
+func (c *IMAPClient) EnableQResync() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.HasQResync() {
+		return nil // Server doesn't support it, no-op
+	}
+
+	// Send ENABLE QRESYNC command per RFC 7162
+	response, err := c.sendCommand("ENABLE QRESYNC")
+	if err != nil {
+		return fmt.Errorf("failed to enable QRESYNC: %w", err)
+	}
+
+	// Check for ENABLED response
+	if strings.Contains(response, "ENABLED") {
+		c.qresyncEnabled = true
+		return nil
+	}
+
+	// Some servers may not return ENABLED but still enable it
+	// If no error, assume success
+	c.qresyncEnabled = true
+	return nil
+}
+
 // GetHighestModSeq returns the highest modification sequence for the selected folder
 func (c *IMAPClient) GetHighestModSeq() uint64 {
 	return c.highestModSeq
@@ -194,7 +266,7 @@ func (c *IMAPClient) refreshCapabilities() error {
 func (c *IMAPClient) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	if c.conn != nil {
 		c.conn.NetConn.Close()
 		return nil
@@ -206,15 +278,15 @@ func (c *IMAPClient) Close() error {
 func (c *IMAPClient) ListFolders() ([]FolderInfo, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	// Send LIST command
 	response, err := c.sendCommand("LIST \"\" \"*\"")
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var folders []FolderInfo
-	
+
 	// Parse LIST responses
 	for _, line := range strings.Split(response, "\n") {
 		if strings.Contains(line, "LIST") {
@@ -224,7 +296,7 @@ func (c *IMAPClient) ListFolders() ([]FolderInfo, error) {
 			}
 		}
 	}
-	
+
 	return folders, nil
 }
 
@@ -278,29 +350,54 @@ func (c *IMAPClient) GetFolderStatus(folder string) (*FolderStatus, error) {
 func (c *IMAPClient) FetchMessages(uids []uint32, includeBody bool) ([]MessageEnvelope, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	uidSet := buildUIDSet(uids)
 	command := fmt.Sprintf("UID FETCH %s (UID FLAGS INTERNALDATE ENVELOPE RFC822.SIZE)", uidSet)
-	
+
 	response, err := c.sendCommand(command)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return parseFetchResponse(response)
+}
+
+// FetchMessagesWithModSeq fetches message metadata with CONDSTORE QRESYNC support
+// Returns messages that have changed since the specified modseq, plus the highest modseq seen
+func (c *IMAPClient) FetchMessagesWithModSeq(uids []uint32, knownModSeq uint64) ([]MessageEnvelope, uint64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	uidSet := buildUIDSet(uids)
+	var command string
+
+	// Use CHANGEDSINCE modifier if CONDSTORE/QRESYNC is available and modseq is provided
+	if c.HasCondStore() && knownModSeq > 0 {
+		command = fmt.Sprintf("UID FETCH %s (UID FLAGS INTERNALDATE ENVELOPE RFC822.SIZE) (CHANGEDSINCE %d)", uidSet, knownModSeq)
+	} else {
+		command = fmt.Sprintf("UID FETCH %s (UID FLAGS INTERNALDATE ENVELOPE RFC822.SIZE)", uidSet)
+	}
+
+	response, err := c.sendCommand(command)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	envelopes, highestModSeq := parseFetchResponseWithModSeq(response)
+	return envelopes, highestModSeq, nil
 }
 
 // FetchMessageRaw fetches raw message content
 func (c *IMAPClient) FetchMessageRaw(uid uint32) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	command := fmt.Sprintf("UID FETCH %d RFC822", uid)
 	response, err := c.sendCommand(command)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return extractRFC822(response)
 }
 
@@ -318,6 +415,63 @@ func (c *IMAPClient) Search(criteria string) ([]uint32, error) {
 	return parseSearchResponse(response)
 }
 
+// SortMessages performs server-side sorting using IMAP UID SORT command (RFC 5256)
+// Returns sorted UIDs based on sort criteria and search criteria
+// searchCriteria can be "ALL", "UNSEEN", "FROM name", etc.
+func (c *IMAPClient) SortMessages(sortBy models.SortField, sortOrder models.SortOrder, searchCriteria string) ([]uint32, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.HasSort() {
+		return nil, fmt.Errorf("server does not support SORT extension")
+	}
+
+	// Build sort key
+	sortKey := c.buildSortKey(sortBy, sortOrder)
+
+	// Default to ALL if no search criteria
+	if searchCriteria == "" {
+		searchCriteria = "ALL"
+	}
+
+	// Build UID SORT command per RFC 5256
+	// Format: UID SORT <sort-keys> <charset> <search-criteria>
+	command := fmt.Sprintf("UID SORT %s UTF-8 %s", sortKey, searchCriteria)
+
+	response, err := c.sendCommand(command)
+	if err != nil {
+		return nil, fmt.Errorf("SORT command failed: %w", err)
+	}
+
+	return parseSearchResponse(response)
+}
+
+// buildSortKey builds the sort key string for IMAP SORT command
+func (c *IMAPClient) buildSortKey(sortBy models.SortField, sortOrder models.SortOrder) string {
+	direction := ""
+	if sortOrder == models.SortOrderDesc {
+		direction = "REVERSE "
+	}
+
+	switch sortBy {
+	case models.SortByDate:
+		return direction + "DATE"
+	case models.SortByFrom:
+		return direction + "FROM"
+	case models.SortBySubject:
+		return direction + "SUBJECT"
+	case models.SortByTo:
+		return direction + "TO"
+	case models.SortBySize:
+		return direction + "SIZE"
+	case models.SortByHasAttachments:
+		// No direct SORT extension for attachments, fall back to DATE
+		return direction + "DATE"
+	default:
+		return direction + "DATE"
+	}
+}
+
 // SendCommand sends a raw IMAP command and returns the response
 func (c *IMAPClient) SendCommand(command string) (string, error) {
 	c.mu.Lock()
@@ -330,12 +484,12 @@ func (c *IMAPClient) SendCommand(command string) (string, error) {
 func (c *IMAPClient) Idle(ctx context.Context, handler func(event string, data []byte)) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	// Send IDLE command
 	if err := c.sendCommandNoResponse("IDLE"); err != nil {
 		return err
 	}
-	
+
 	// Read responses in a loop
 	go func() {
 		reader := bufio.NewReader(c.conn.NetConn)
@@ -349,7 +503,7 @@ func (c *IMAPClient) Idle(ctx context.Context, handler func(event string, data [
 				if err != nil {
 					return
 				}
-				
+
 				lineStr := strings.TrimSpace(string(line))
 				if strings.HasPrefix(lineStr, "* ") {
 					event := strings.TrimPrefix(lineStr, "* ")
@@ -358,7 +512,7 @@ func (c *IMAPClient) Idle(ctx context.Context, handler func(event string, data [
 			}
 		}
 	}()
-	
+
 	return nil
 }
 
@@ -376,11 +530,11 @@ func (c *IMAPClient) readGreeting() error {
 	if err != nil {
 		return fmt.Errorf("failed to read greeting: %w", err)
 	}
-	
+
 	if !strings.HasPrefix(line, "* ") {
 		return fmt.Errorf("invalid greeting: %s", line)
 	}
-	
+
 	return nil
 }
 
@@ -388,26 +542,26 @@ func (c *IMAPClient) readGreeting() error {
 func (c *IMAPClient) sendCommand(command string) (string, error) {
 	c.seqNum++
 	tag := fmt.Sprintf("A%04d", c.seqNum)
-	
+
 	writer := bufio.NewWriter(c.getWriter())
 	_, err := fmt.Fprintf(writer, "%s %s\r\n", tag, command)
 	if err != nil {
 		return "", err
 	}
 	writer.Flush()
-	
+
 	// Read response
 	reader := bufio.NewReader(c.getReader())
 	var response strings.Builder
-	
+
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			return response.String(), err
 		}
-		
+
 		response.WriteString(line)
-		
+
 		// Check for tagged response
 		if strings.HasPrefix(line, tag) {
 			if strings.Contains(line, "OK") {
@@ -423,7 +577,7 @@ func (c *IMAPClient) sendCommand(command string) (string, error) {
 func (c *IMAPClient) sendCommandNoResponse(command string) error {
 	c.seqNum++
 	tag := fmt.Sprintf("A%04d", c.seqNum)
-	
+
 	writer := bufio.NewWriter(c.getWriter())
 	_, err := fmt.Fprintf(writer, "%s %s\r\n", tag, command)
 	if err != nil {
@@ -452,7 +606,7 @@ func (c *IMAPClient) getWriter() io.Writer {
 
 func parseListResponse(line string) FolderInfo {
 	var folder FolderInfo
-	
+
 	// Parse: * LIST (\HasNoChildren) "/" "INBOX"
 	parts := strings.Split(line, " ")
 	if len(parts) >= 4 {
@@ -472,7 +626,7 @@ func parseListResponse(line string) FolderInfo {
 			}
 		}
 	}
-	
+
 	return folder
 }
 
@@ -554,21 +708,21 @@ func parseFolderStatusResponse(response string) FolderStatus {
 
 func parseFetchResponse(response string) ([]MessageEnvelope, error) {
 	var envelopes []MessageEnvelope
-	
+
 	// Simplified parsing - production would need full IMAP response parser
 	lines := strings.Split(response, "\n")
 	var currentEnvelope *MessageEnvelope
-	
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		
+
 		if strings.Contains(line, "FETCH") {
 			if currentEnvelope != nil {
 				envelopes = append(envelopes, *currentEnvelope)
 			}
 			currentEnvelope = &MessageEnvelope{}
 		}
-		
+
 		if currentEnvelope != nil {
 			if strings.Contains(line, "UID") {
 				if uid, err := extractNumber(line); err == nil {
@@ -582,12 +736,96 @@ func parseFetchResponse(response string) ([]MessageEnvelope, error) {
 			}
 		}
 	}
-	
+
 	if currentEnvelope != nil {
 		envelopes = append(envelopes, *currentEnvelope)
 	}
-	
+
 	return envelopes, nil
+}
+
+// parseFetchResponseWithModSeq parses FETCH response and extracts highest modseq
+// Returns envelopes and the highest modification sequence seen
+func parseFetchResponseWithModSeq(response string) ([]MessageEnvelope, uint64) {
+	var envelopes []MessageEnvelope
+	var highestModSeq uint64
+
+	lines := strings.Split(response, "\n")
+	var currentEnvelope *MessageEnvelope
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		if strings.Contains(line, "FETCH") {
+			if currentEnvelope != nil {
+				envelopes = append(envelopes, *currentEnvelope)
+			}
+			currentEnvelope = &MessageEnvelope{}
+		}
+
+		if currentEnvelope != nil {
+			if strings.Contains(line, "UID") {
+				if uid, err := extractNumber(line); err == nil {
+					currentEnvelope.UID = uint32(uid)
+				}
+			}
+			if strings.Contains(line, "RFC822.SIZE") {
+				if size, err := extractNumber(line); err == nil {
+					currentEnvelope.Size = int64(size)
+				}
+			}
+		}
+
+		// Extract MODSEQ from response: MODSEQ (12345)
+		if strings.Contains(line, "MODSEQ") {
+			if modSeq := extractModSeq(line); modSeq > highestModSeq {
+				highestModSeq = modSeq
+			}
+		}
+	}
+
+	if currentEnvelope != nil {
+		envelopes = append(envelopes, *currentEnvelope)
+	}
+
+	return envelopes, highestModSeq
+}
+
+// extractModSeq extracts modification sequence from a line
+func extractModSeq(line string) uint64 {
+	// Look for MODSEQ (12345) pattern
+	startIdx := strings.Index(line, "MODSEQ")
+	if startIdx == -1 {
+		return 0
+	}
+
+	// Find the number after MODSEQ
+	rest := line[startIdx+6:]
+	rest = strings.TrimSpace(rest)
+
+	// Remove parentheses if present
+	rest = strings.Trim(rest, "()")
+
+	// Extract digits
+	var digits strings.Builder
+	for _, r := range rest {
+		if r >= '0' && r <= '9' {
+			digits.WriteRune(r)
+		} else if digits.Len() > 0 {
+			break
+		}
+	}
+
+	if digits.Len() == 0 {
+		return 0
+	}
+
+	modSeq, err := strconv.ParseUint(digits.String(), 10, 64)
+	if err != nil {
+		return 0
+	}
+
+	return modSeq
 }
 
 func parseSearchResponse(response string) ([]uint32, error) {
@@ -697,29 +935,29 @@ func extractRFC822(response string) ([]byte, error) {
 	// Find the literal data between braces
 	start := strings.Index(response, "{")
 	end := strings.Index(response, "}")
-	
+
 	if start == -1 || end == -1 {
 		return nil, fmt.Errorf("invalid RFC822 response")
 	}
-	
+
 	// Extract size
 	sizeStr := response[start+1 : end]
 	size, err := strconv.Atoi(sizeStr)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Extract data (simplified - production would handle literals properly)
 	dataStart := end + 2 // Skip } and \r\n
 	if dataStart >= len(response) {
 		return nil, fmt.Errorf("invalid RFC822 response")
 	}
-	
+
 	data := []byte(response[dataStart:])
 	if len(data) > size {
 		data = data[:size]
 	}
-	
+
 	return data, nil
 }
 
@@ -727,16 +965,16 @@ func buildUIDSet(uids []uint32) string {
 	if len(uids) == 0 {
 		return ""
 	}
-	
+
 	if len(uids) == 1 {
 		return strconv.Itoa(int(uids[0]))
 	}
-	
+
 	// Build range if consecutive
 	var sets []string
 	start := uids[0]
 	end := uids[0]
-	
+
 	for i := 1; i < len(uids); i++ {
 		if uids[i] == end+1 {
 			end = uids[i]
@@ -750,13 +988,13 @@ func buildUIDSet(uids []uint32) string {
 			end = uids[i]
 		}
 	}
-	
+
 	if start == end {
 		sets = append(sets, strconv.Itoa(int(start)))
 	} else {
 		sets = append(sets, fmt.Sprintf("%d:%d", start, end))
 	}
-	
+
 	return strings.Join(sets, ",")
 }
 
@@ -774,15 +1012,15 @@ func extractNumber(line string) (int, error) {
 func (c *IMAPClient) StreamMessage(uid uint32, chunkSize int, handler func(chunk []byte) error) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	command := fmt.Sprintf("UID FETCH %d RFC822", uid)
 	if err := c.sendCommandNoResponse(command); err != nil {
 		return err
 	}
-	
+
 	reader := bufio.NewReader(c.getReader())
 	var buffer bytes.Buffer
-	
+
 	for {
 		chunk := make([]byte, chunkSize)
 		n, err := reader.Read(chunk)
@@ -799,6 +1037,6 @@ func (c *IMAPClient) StreamMessage(uid uint32, chunkSize int, handler func(chunk
 			return err
 		}
 	}
-	
+
 	return nil
 }

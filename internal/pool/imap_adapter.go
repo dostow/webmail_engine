@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -16,13 +17,31 @@ import (
 	"github.com/emersion/go-imap/v2/imapclient"
 )
 
+// Type aliases for imapclient types used in sorting
+type (
+	SortKey       = imapclient.SortKey
+	SortCriterion = imapclient.SortCriterion
+	SortOptions   = imapclient.SortOptions
+)
+
+// SortKey constants
+const (
+	SortKeyArrival SortKey = imapclient.SortKeyArrival
+	SortKeyCc      SortKey = imapclient.SortKeyCc
+	SortKeyDate    SortKey = imapclient.SortKeyDate
+	SortKeyFrom    SortKey = imapclient.SortKeyFrom
+	SortKeySize    SortKey = imapclient.SortKeySize
+	SortKeySubject SortKey = imapclient.SortKeySubject
+	SortKeyTo      SortKey = imapclient.SortKeyTo
+)
+
 // IMAPAdapter wraps go-imap/v2 to match our interface
 type IMAPAdapter struct {
-	client          *imapclient.Client
-	conn            net.Conn
-	mu              sync.Mutex
-	selectedBox     *imap.SelectData
-	invalidateFunc  func() // Callback to invalidate this session in the pool
+	client         *imapclient.Client
+	conn           net.Conn
+	mu             sync.Mutex
+	selectedBox    *imap.SelectData
+	invalidateFunc func() // Callback to invalidate this session in the pool
 }
 
 // ConnectIMAPv2 establishes connection using go-imap/v2
@@ -67,6 +86,15 @@ func ConnectIMAPv2(ctx context.Context, config IMAPConfig) (*IMAPAdapter, error)
 	if err := adapter.authenticate(config.Username, config.Password); err != nil {
 		client.Close()
 		return nil, err
+	}
+
+	// Enable QRESYNC if supported (must be done before SELECT/EXAMINE)
+	if adapter.HasQResync() {
+		if err := adapter.enableQResync(); err != nil {
+			log.Printf("Warning: failed to enable QRESYNC: %v", err)
+		} else {
+			log.Printf("QRESYNC enabled successfully")
+		}
 	}
 
 	return adapter, nil
@@ -437,6 +465,144 @@ func (a *IMAPAdapter) HasSortCapability() bool {
 	return a.client.Caps().Has(imap.CapSort)
 }
 
+// HasSort checks if the server supports SORT extension (alias for HasSortCapability)
+func (a *IMAPAdapter) HasSort() bool {
+	return a.HasSortCapability()
+}
+
+// HasSearchRes checks if the server supports SEARCHRES extension (RFC 5182)
+func (a *IMAPAdapter) HasSearchRes() bool {
+	return a.client.Caps().Has(imap.CapSearchRes)
+}
+
+// SortMessages performs server-side sorting using IMAP UID SORT command (RFC 5256)
+// Returns sorted UIDs based on sort criteria and search criteria
+func (a *IMAPAdapter) SortMessages(sortBy models.SortField, sortOrder models.SortOrder, searchCriteria string) ([]uint32, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if !a.HasSort() {
+		return nil, fmt.Errorf("server does not support SORT extension")
+	}
+
+	// Parse search criteria
+	searchCrit, err := parseSearchCriteria(searchCriteria)
+	if err != nil {
+		return nil, fmt.Errorf("invalid search criteria: %w", err)
+	}
+
+	// Build sort criteria - always use ascending order from server for consistency
+	sortKey := buildSortKey(sortBy, models.SortOrderAsc)
+	sortCriteria := []SortCriterion{sortKey}
+
+	// Use UID SORT command
+	sortOptions := &SortOptions{
+		SearchCriteria: &searchCrit,
+		SortCriteria:   sortCriteria,
+	}
+
+	// Get sorted UIDs - UIDSort returns []uint32 directly
+	sortedUIDs, err := a.client.UIDSort(sortOptions).Wait()
+	if err != nil {
+		return nil, err
+	}
+
+	// Reverse client-side if descending order requested
+	// This ensures consistent behavior across all IMAP servers
+	if sortOrder == models.SortOrderDesc {
+		for i, j := 0, len(sortedUIDs)-1; i < j; i, j = i+1, j-1 {
+			sortedUIDs[i], sortedUIDs[j] = sortedUIDs[j], sortedUIDs[i]
+		}
+	}
+
+	return sortedUIDs, nil
+}
+
+// FetchMessagesWithModSeq fetches message metadata with CONDSTORE/QRESYNC support
+// Returns messages that have changed since the specified modseq
+func (a *IMAPAdapter) FetchMessagesWithModSeq(uids []uint32, knownModSeq uint64) ([]MessageEnvelope, uint64, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if len(uids) == 0 {
+		return []MessageEnvelope{}, 0, nil
+	}
+
+	// Convert to imap.UIDSet
+	uidSet := make(imap.UIDSet, 0)
+	for _, uid := range uids {
+		uidSet = append(uidSet, imap.UIDRange{Start: imap.UID(uid), Stop: imap.UID(uid)})
+	}
+
+	// Create fetch options with CHANGEDSINCE if modseq provided
+	fetchOptions := &imap.FetchOptions{
+		Envelope:     true,
+		Flags:        true,
+		InternalDate: true,
+		RFC822Size:   true,
+	}
+
+	if knownModSeq > 0 {
+		fetchOptions.ChangedSince = knownModSeq
+	}
+
+	var envelopes []MessageEnvelope
+	var highestModSeq uint64
+
+	// Use FETCH with UID set
+	messages, err := a.client.Fetch(uidSet, fetchOptions).Collect()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	for _, msg := range messages {
+		envelope := MessageEnvelope{
+			UID:   uint32(msg.UID),
+			Flags: make([]string, len(msg.Flags)),
+			Size:  msg.RFC822Size,
+			Date:  msg.InternalDate,
+		}
+
+		for i, flag := range msg.Flags {
+			envelope.Flags[i] = string(flag)
+		}
+
+		if msg.Envelope != nil {
+			env := msg.Envelope
+			envelope.Subject = env.Subject
+			envelope.MessageID = env.MessageID
+			if !env.Date.IsZero() {
+				envelope.Date = env.Date
+			}
+
+			// Parse From addresses
+			for _, addr := range env.From {
+				envelope.From = append(envelope.From, models.Contact{
+					Name:    addr.Name,
+					Address: addr.Addr(),
+				})
+			}
+
+			// Parse To addresses
+			for _, addr := range env.To {
+				envelope.To = append(envelope.To, models.Contact{
+					Name:    addr.Name,
+					Address: addr.Addr(),
+				})
+			}
+		}
+
+		// Track highest modseq
+		if msg.ModSeq > highestModSeq {
+			highestModSeq = msg.ModSeq
+		}
+
+		envelopes = append(envelopes, envelope)
+	}
+
+	return envelopes, highestModSeq, nil
+}
+
 // Idle starts IMAP IDLE mode for real-time updates
 func (a *IMAPAdapter) Idle(ctx context.Context, handler func(event string, data []byte)) error {
 	a.mu.Lock()
@@ -532,6 +698,40 @@ func parseSearchCriteria(criteria string) (imap.SearchCriteria, error) {
 	}
 
 	return searchCriteria, nil
+}
+
+// buildSortKey builds the sort key for IMAP SORT command
+func buildSortKey(sortBy models.SortField, sortOrder models.SortOrder) SortCriterion {
+	var key SortKey
+
+	switch sortBy {
+	case models.SortByDate:
+		key = SortKeyDate
+	case models.SortByFrom:
+		key = SortKeyFrom
+	case models.SortBySubject:
+		key = SortKeySubject
+	case models.SortByTo:
+		key = SortKeyTo
+	case models.SortBySize:
+		key = SortKeySize
+	default:
+		key = SortKeyDate
+	}
+
+	// For SortOrderDesc (newest first), we need REVERSE because DATE sort is ascending by default
+	// For SortOrderAsc (oldest first), we don't use REVERSE
+	// Note: go-imap/v2 Reverse=true means "reverse the natural order"
+	// Natural order for DATE is oldest-first, so Reverse=true gives newest-first
+	reverse := false
+	if sortOrder == models.SortOrderDesc {
+		reverse = true
+	}
+
+	return SortCriterion{
+		Key:     key,
+		Reverse: reverse,
+	}
 }
 
 // GetClient returns the underlying IMAP client
@@ -644,6 +844,24 @@ func (a *IMAPAdapter) HasQResync() bool {
 // HasCondStore checks if the server supports CONDSTORE extension
 func (a *IMAPAdapter) HasCondStore() bool {
 	return a.client.Caps().Has(imap.CapCondStore) || a.HasQResync()
+}
+
+// enableQResync sends the ENABLE QRESYNC command to the server
+// Must be called after authentication and before SELECT/EXAMINE
+// Returns nil if server doesn't support QRESYNC (no-op)
+func (a *IMAPAdapter) enableQResync() error {
+	if !a.HasQResync() {
+		return nil // Server doesn't support it, no-op
+	}
+
+	// Use go-imap/v2 Enable command for QRESYNC
+	// The Enable command is available in go-imap/v2 for RFC 7162 support
+	_, err := a.client.Enable(imap.CapQResync).Wait()
+	if err != nil {
+		return fmt.Errorf("failed to enable QRESYNC: %w", err)
+	}
+
+	return nil
 }
 
 // GetHighestModSeq returns the highest modification sequence for the selected folder

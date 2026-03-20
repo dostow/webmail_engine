@@ -206,90 +206,97 @@ func (s *MessageService) GetMessageList(
 		cachedMetadata, err := s.uidListCache.Get(ctx, uidCacheKey)
 
 		if err == nil && cachedMetadata != nil {
-			log.Printf("UID cache hit: %d UIDs for folder %s (modseq=%d)", len(cachedMetadata.UIDs), folder, cachedMetadata.HighestModSeq)
-			refreshCache := false
-
-			// Phase 1: Check for significant count changes (deletions without QRESYNC)
-			countDiff := abs(currentMessageCount - cachedMetadata.Count)
-			if countDiff > cachedMetadata.Count/10 && cachedMetadata.Count > 0 {
-				// More than 10% change - refresh cache
-				log.Printf("Cache invalidation: message count changed significantly (%d -> %d), refreshing", cachedMetadata.Count, currentMessageCount)
-				refreshCache = true
-			} else if cachedMetadata.QResyncCapable && client.HasQResync() && currentModSeq > cachedMetadata.HighestModSeq {
-				// Phase 2: QRESYNC support - check for vanished messages
-				log.Printf("QRESYNC: modseq changed (%d -> %d), checking for vanished messages", cachedMetadata.HighestModSeq, currentModSeq)
-				vanished, err := client.UIDFetchVanished(cachedMetadata.HighestModSeq)
-				if err == nil && len(vanished) > 0 {
-					log.Printf("QRESYNC: %d messages vanished, updating cache", len(vanished))
-					// Remove vanished UIDs from cache
-					cachedMetadata.UIDs = removeUIDsFromList(cachedMetadata.UIDs, vanished)
-					// Update cache with new UID list
-					if err := s.uidListCache.Set(ctx, uidCacheKey, cachedMetadata.UIDs, len(cachedMetadata.UIDs), currentModSeq, true); err != nil {
-						log.Printf("Warning: failed to update UID cache: %v", err)
-					}
-					allUIDs = cachedMetadata.UIDs
-				} else {
-					allUIDs = cachedMetadata.UIDs
-				}
-				goto UseUIDs
-			}
-
-			if refreshCache {
-				// Fall through to IMAP fetch
-			} else {
+			// Use new smart cache validation
+			if s.isCacheValid(cachedMetadata, currentModSeq, currentMessageCount, sortBy, sortOrder) {
+				log.Printf("UID cache HIT: %d UIDs for folder %s (modseq=%d, sort=%s %s)",
+					len(cachedMetadata.UIDs), folder, cachedMetadata.HighestModSeq, cachedMetadata.SortField, cachedMetadata.SortOrder)
 				allUIDs = cachedMetadata.UIDs
 				goto UseUIDs
 			}
+			log.Printf("UID cache INVALID, refreshing for folder %s", folder)
 		}
 
 		// Cache miss or refresh needed - fetch from IMAP
-		log.Printf("UID cache miss for folder %s, fetching from IMAP", folder)
+		log.Printf("UID cache MISS for folder %s, fetching from IMAP", folder)
 
-		// Use server-side SORT if available (RFC 5256)
-		if client.HasSort() {
-			log.Printf("Using server-side SORT: sortBy=%s, sortOrder=%s", sortBy, sortOrder)
-			allUIDs, err = client.SortMessages(sortBy, sortOrder, "ALL")
-			if err != nil {
-				log.Printf("Server SORT failed: %v, falling back to SEARCH", err)
-				allUIDs, err = client.Search("ALL")
+		// Determine sorting strategy based on mailbox size
+		var sortStrategy string
+		var sortDuration time.Duration
+
+		switch {
+		case currentMessageCount < sortThreshold:
+			// Small mailbox: Use server-side SORT
+			sortStrategy = "server_sort"
+			if client.HasSort() {
+				log.Printf("Using server-side SORT: sortBy=%s, sortOrder=%s (%d messages < threshold %d)",
+					sortBy, sortOrder, currentMessageCount, sortThreshold)
+				sortStart := time.Now()
+				allUIDs, err = client.SortMessages(sortBy, sortOrder, "ALL")
+				sortDuration = time.Since(sortStart)
+
 				if err != nil {
-					log.Printf("IMAP search failed: %v", err)
-					return nil, fmt.Errorf("search failed: %w", err)
+					log.Printf("Server SORT failed after %v: %v", sortDuration, err)
+					allUIDs, err = s.handleSortFailure(ctx, client, folder, accountID, imapConfig, release, sortBy, sortOrder, err)
+					if err != nil {
+						return nil, err
+					}
+					sortStrategy = "fallback_search"
+				} else {
+					log.Printf("SORT completed in %v: %d UIDs", sortDuration, len(allUIDs))
+					if sortDuration > 5*time.Second {
+						log.Printf("WARN: SORT took >5s, consider date-range filtering for this mailbox")
+					}
 				}
+			} else {
+				// Server doesn't support SORT
+				log.Printf("Server doesn't support SORT, using SEARCH")
+				allUIDs, err = client.Search("ALL")
+				sortStrategy = "search_no_sort_cap"
 			}
-		} else {
-			allUIDs, err = client.Search("ALL")
+
+		case currentMessageCount <= maxSortUIDs:
+			// Medium-large mailbox: Use date-range filtering
+			sortStrategy = "date_range"
+			log.Printf("Using date-range filter (%d messages >= threshold %d)", currentMessageCount, sortThreshold)
+			allUIDs, err = s.searchByDateRange(ctx, client, folder, sortBy, sortOrder, largeMailboxRecentDays)
 			if err != nil {
-				log.Printf("IMAP search failed: %v", err)
-				return nil, fmt.Errorf("search failed: %w", err)
+				log.Printf("Date-range search failed: %v, falling back to SEARCH", err)
+				allUIDs, err = client.Search("ALL")
+				sortStrategy = "fallback_search"
+			}
+
+		default:
+			// Very large mailbox: Limited SEARCH
+			sortStrategy = "limited_search"
+			log.Printf("Mailbox too large for SORT (%d > %d), using limited SEARCH", currentMessageCount, maxSortUIDs)
+			allUIDs, err = client.Search("ALL")
+			if err == nil && len(allUIDs) > maxSortUIDs {
+				// Take last N UIDs (most recent in UID order)
+				allUIDs = allUIDs[len(allUIDs)-maxSortUIDs:]
+				log.Printf("Limited to last %d UIDs", len(allUIDs))
 			}
 		}
 
-		// Cache the UID list with metadata for 5 minutes
-		if err := s.uidListCache.Set(ctx, uidCacheKey, allUIDs, len(allUIDs), currentModSeq, client.HasQResync()); err != nil {
-			log.Printf("Warning: failed to cache UID list: %v", err)
+		if err != nil {
+			log.Printf("IMAP search failed: %v", err)
+			return nil, fmt.Errorf("search failed: %w", err)
 		}
-	} else {
-		// No cache available - fetch from IMAP
-		// Use server-side SORT if available
-		if client.HasSort() {
-			log.Printf("Using server-side SORT: sortBy=%s, sortOrder=%s", sortBy, sortOrder)
-			allUIDs, err = client.SortMessages(sortBy, sortOrder, "ALL")
-			if err != nil {
-				log.Printf("Server SORT failed: %v, falling back to SEARCH", err)
-				allUIDs, err = client.Search("ALL")
-				if err != nil {
-					log.Printf("IMAP search failed: %v", err)
-					return nil, fmt.Errorf("search failed: %w", err)
-				}
-			}
+
+		// Validate UID list before caching to prevent caching nil data
+		// Note: Empty UID list (len=0) is valid and SHOULD be cached
+		// This handles cases like: empty folder, all messages deleted, empty search results
+		if allUIDs == nil {
+			log.Printf("Skipping UID cache write: allUIDs is nil for folder %s", folder)
 		} else {
-			allUIDs, err = client.Search("ALL")
-			if err != nil {
-				log.Printf("IMAP search failed: %v", err)
-				return nil, fmt.Errorf("search failed: %w", err)
+			// Cache the UID list with metadata (including empty slices)
+			if err := s.uidListCache.Set(ctx, uidCacheKey, allUIDs, len(allUIDs), currentModSeq, client.HasQResync(), string(sortBy), string(sortOrder), "ALL"); err != nil {
+				log.Printf("Warning: failed to cache UID list: %v", err)
 			}
 		}
+
+		// Log sorting strategy metrics
+		log.Printf("SORT_STATS: account=%s folder=%s strategy=%s message_count=%d duration_ms=%d uids_returned=%d",
+			accountID, folder, sortStrategy, currentMessageCount, sortDuration.Milliseconds(), len(allUIDs))
 	}
 
 UseUIDs:
@@ -518,8 +525,16 @@ UseUIDs:
 
 	// Cache the message list with current modseq for smart invalidation
 	if s.messageListCache != nil {
-		if err := s.messageListCache.Set(ctx, cacheKey, messageList, highestModSeq); err != nil {
-			log.Printf("Warning: failed to cache message list: %v", err)
+		// Validate message list before caching
+		// Note: nil check is critical - nil means error/invalid
+		// Empty Messages slice (len=0) is valid and SHOULD be cached
+		// This handles: empty folder, all messages deleted, empty page (e.g., page 10 of 5)
+		if messageList == nil {
+			log.Printf("Skipping message list cache write: messageList is nil for folder %s, page %d", folder, cursorData.Page+1)
+		} else {
+			if err := s.messageListCache.Set(ctx, cacheKey, messageList, highestModSeq); err != nil {
+				log.Printf("Warning: failed to cache message list: %v", err)
+			}
 		}
 	}
 
@@ -1983,4 +1998,223 @@ func buildUIDSet(uids []uint32) string {
 // GetPoolStats returns statistics about the IMAP session pool
 func (s *MessageService) GetPoolStats() pool.SessionPoolStats {
 	return s.sessions.Stats()
+}
+
+// Sorting strategy constants
+const (
+	// sortThreshold - Use server-side SORT below this count
+	sortThreshold = 10000
+
+	// largeMailboxRecentDays - For large mailboxes, filter to recent messages
+	largeMailboxRecentDays = 90
+
+	// maxSortUIDs - Maximum UIDs to fetch in single SORT operation
+	maxSortUIDs = 50000
+)
+
+// isConnectionErrorForService checks if an error indicates a dead IMAP connection
+// This is a service-level wrapper around the pool's connection error detection
+func isConnectionErrorForService(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+
+	// Check for common connection error indicators
+	if strings.Contains(errStr, "use of closed network connection") ||
+		strings.Contains(errStr, "closed network connection") ||
+		strings.Contains(errStr, "i/o timeout") ||
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "broken pipe") {
+		return true
+	}
+
+	return false
+}
+
+// isTimeoutError checks if an error is a timeout
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+	return strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "i/o timeout") ||
+		strings.Contains(errStr, "context deadline exceeded")
+}
+
+// isCacheValid checks if cached UID list is still valid
+func (s *MessageService) isCacheValid(
+	cached *messagecache.UIDListWithMetadata,
+	currentModSeq uint64,
+	currentCount int,
+	sortField models.SortField,
+	sortOrder models.SortOrder,
+) bool {
+	if cached == nil {
+		return false
+	}
+
+	// Check if sort parameters match
+	if cached.SortField != string(sortField) || cached.SortOrder != string(sortOrder) {
+		log.Printf("Cache invalid: sort changed (cached=%s %s, requested=%s %s)",
+			cached.SortField, cached.SortOrder, sortField, sortOrder)
+		return false
+	}
+
+	// QRESYNC support: Check modseq only
+	if cached.QResyncCapable {
+		valid := currentModSeq <= cached.HighestModSeq
+		if !valid {
+			log.Printf("Cache invalid: modseq changed (cached=%d, current=%d)", cached.HighestModSeq, currentModSeq)
+		}
+		return valid
+	}
+
+	// Non-QRESYNC: Check for significant count changes (>10%)
+	countDiff := abs(currentCount - cached.Count)
+	if cached.Count > 0 && countDiff > cached.Count/10 {
+		log.Printf("Cache invalid: count changed significantly (%d -> %d, diff=%d)", cached.Count, currentCount, countDiff)
+		return false
+	}
+
+	// Check cache age (max 10 minutes)
+	if time.Since(cached.CachedAt) > messagecache.TTLUIDList {
+		log.Printf("Cache invalid: expired (age=%v)", time.Since(cached.CachedAt))
+		return false
+	}
+
+	return true
+}
+
+// handleSortFailure handles SORT failures with appropriate fallback
+func (s *MessageService) handleSortFailure(
+	ctx context.Context,
+	client *pool.IMAPAdapter,
+	folder string,
+	accountID string,
+	imapConfig pool.IMAPConfig,
+	release func(),
+	sortBy models.SortField,
+	sortOrder models.SortOrder,
+	sortErr error,
+) ([]uint32, error) {
+	// Check if connection is dead - get fresh connection before fallback
+	if isConnectionErrorForService(sortErr) {
+		log.Printf("Connection dead during SORT, releasing session and getting fresh connection")
+		release()
+
+		// Get fresh session
+		imapCtx2, cancel2 := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel2()
+
+		var err error
+		client, release, err = s.sessions.Acquire(imapCtx2, accountID, imapConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get fresh connection after SORT failure: %w", err)
+		}
+		defer release()
+
+		// Re-select folder on fresh connection
+		_, err = client.SelectFolder(folder)
+		if err != nil {
+			return nil, fmt.Errorf("failed to select folder on fresh connection: %w", err)
+		}
+	}
+
+	// Retry SEARCH with fresh connection
+	allUIDs, err := client.Search("ALL")
+	if err != nil {
+		log.Printf("IMAP search failed: %v", err)
+		return nil, fmt.Errorf("search failed: %w", err)
+	}
+	log.Printf("SEARCH fallback succeeded after SORT failure")
+	return allUIDs, nil
+}
+
+// searchByDateRange performs date-filtered search for large mailboxes
+// Returns UIDs from recent messages only (configurable time window)
+func (s *MessageService) searchByDateRange(
+	ctx context.Context,
+	client *pool.IMAPAdapter,
+	folder string,
+	sortBy models.SortField,
+	sortOrder models.SortOrder,
+	days int,
+) ([]uint32, error) {
+	// Calculate date range
+	sinceDate := time.Now().AddDate(0, 0, -days)
+	searchCriteria := fmt.Sprintf("SINCE %s", sinceDate.Format("02-Jan-2006"))
+
+	log.Printf("Date-range search: %s (last %d days)", searchCriteria, days)
+
+	// Perform SEARCH (not SORT) - much faster on large mailboxes
+	uids, err := client.Search(searchCriteria)
+	if err != nil {
+		return nil, fmt.Errorf("date-range search failed: %w", err)
+	}
+
+	log.Printf("Date-range search returned %d UIDs", len(uids))
+
+	// Client-side sort on reduced set
+	if len(uids) > 0 {
+		// Fetch envelopes for sorting
+		envelopes, err := client.FetchMessages(uids, false)
+		if err != nil {
+			log.Printf("Failed to fetch envelopes for sorting: %v, returning unsorted UIDs", err)
+			return uids, nil
+		}
+
+		// Sort by date (or other field)
+		sortedEnvelopes := s.sortEnvelopes(envelopes, sortBy, sortOrder)
+
+		// Extract sorted UIDs
+		sortedUIDs := make([]uint32, len(sortedEnvelopes))
+		for i, env := range sortedEnvelopes {
+			sortedUIDs[i] = env.UID
+		}
+
+		log.Printf("Client-side sort completed: %d UIDs sorted by %s %s", len(sortedUIDs), sortBy, sortOrder)
+		return sortedUIDs, nil
+	}
+
+	return uids, nil
+}
+
+// sortEnvelopes sorts message envelopes client-side
+func (s *MessageService) sortEnvelopes(
+	envelopes []pool.MessageEnvelope,
+	sortBy models.SortField,
+	sortOrder models.SortOrder,
+) []pool.MessageEnvelope {
+	sorted := make([]pool.MessageEnvelope, len(envelopes))
+	copy(sorted, envelopes)
+
+	sort.Slice(sorted, func(i, j int) bool {
+		var less bool
+		switch sortBy {
+		case models.SortByDate, "":
+			less = sorted[i].Date.Before(sorted[j].Date)
+		case models.SortByFrom:
+			if len(sorted[i].From) == 0 || len(sorted[j].From) == 0 {
+				return false
+			}
+			less = sorted[i].From[0].Address < sorted[j].From[0].Address
+		case models.SortBySubject:
+			less = sorted[i].Subject < sorted[j].Subject
+		case models.SortBySize:
+			less = sorted[i].Size < sorted[j].Size
+		default:
+			less = sorted[i].Date.Before(sorted[j].Date)
+		}
+
+		if sortOrder == models.SortOrderDesc {
+			return !less
+		}
+		return less
+	})
+
+	return sorted
 }

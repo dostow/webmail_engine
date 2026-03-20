@@ -20,7 +20,7 @@ const (
 
 	// Default TTL values
 	TTLMessageList = 5 * time.Minute
-	TTLUIDList     = 5 * time.Minute
+	TTLUIDList     = 10 * time.Minute // Increased for better cache hit rate
 )
 
 // CacheStats tracks cache statistics
@@ -113,10 +113,36 @@ func (c *MessageListCache) Get(ctx context.Context, key string, currentModSeq ui
 		return nil, false
 	}
 
+	// Cache integrity check: detect empty or corrupt cache entries
+	if len(data) == 0 {
+		log.Printf("Cache integrity check failed: empty data for key=%s", key)
+		c.stats.Misses++
+		return nil, false
+	}
+
+	// Quick JSON validation before unmarshal to provide better error messages
+	if !isValidJSON(data) {
+		log.Printf("Cache integrity check failed: invalid JSON for key=%s, data length=%d", key, len(data))
+		c.stats.Misses++
+		// Optionally delete the corrupt cache entry
+		_ = c.cache.Delete(ctx, key)
+		return nil, false
+	}
+
 	var cached CachedMessageList
 	if err := json.Unmarshal(data, &cached); err != nil {
 		log.Printf("Failed to unmarshal cached message list: %v", err)
 		c.stats.Misses++
+		// Delete corrupt cache entry to prevent repeated failures
+		_ = c.cache.Delete(ctx, key)
+		return nil, false
+	}
+
+	// Additional integrity check: ensure MessageList is not nil
+	if cached.MessageList == nil {
+		log.Printf("Cache integrity check failed: MessageList is nil for key=%s", key)
+		c.stats.Misses++
+		_ = c.cache.Delete(ctx, key)
 		return nil, false
 	}
 
@@ -159,6 +185,14 @@ func (c *MessageListCache) Set(ctx context.Context, key string, messageList *mod
 		return nil
 	}
 
+	// Validate message list before caching to prevent corrupt cache entries
+	// Note: Empty message list (len=0) is valid - e.g., folder emptied, empty page
+	if messageList == nil {
+		log.Printf("Cache write skipped: messageList is nil for key=%s", key)
+		return nil
+	}
+
+	// Marshal first to validate data integrity
 	cached := CachedMessageList{
 		MessageList:  messageList,
 		CachedModSeq: modSeq,
@@ -169,6 +203,18 @@ func (c *MessageListCache) Set(ctx context.Context, key string, messageList *mod
 	if err != nil {
 		log.Printf("Failed to marshal message list for cache: %v", err)
 		return err
+	}
+
+	// Validate marshaled data is not empty and is valid JSON
+	if len(data) == 0 {
+		log.Printf("Cache write skipped: marshaled data is empty for key=%s", key)
+		return nil
+	}
+
+	// Quick JSON validation before writing to cache
+	if !isValidJSON(data) {
+		log.Printf("Cache write skipped: invalid JSON generated for key=%s", key)
+		return fmt.Errorf("invalid JSON generated during marshaling")
 	}
 
 	if err := c.cache.Set(ctx, key, data, TTLMessageList); err != nil {
@@ -208,6 +254,9 @@ type UIDListWithMetadata struct {
 	HighestModSeq  uint64    `json:"highest_modseq"`
 	QResyncCapable bool      `json:"qresync_capable"`
 	CachedAt       time.Time `json:"cached_at"`
+	SortField      string    `json:"sort_field,omitempty"`      // NEW: Track sort field
+	SortOrder      string    `json:"sort_order,omitempty"`      // NEW: Track sort order
+	SearchCriteria string    `json:"search_criteria,omitempty"` // NEW: Track search criteria used
 }
 
 // BuildUIDKey generates a cache key for a UID list
@@ -226,10 +275,33 @@ func (c *UIDListCache) Get(ctx context.Context, key string) (*UIDListWithMetadat
 		return nil, err
 	}
 
+	// Cache integrity check: detect empty or corrupt cache entries
+	if len(data) == 0 {
+		log.Printf("Cache integrity check failed: empty data for UID key=%s", key)
+		return nil, fmt.Errorf("cache entry is empty")
+	}
+
+	// Quick JSON validation before unmarshal
+	if !isValidJSON(data) {
+		log.Printf("Cache integrity check failed: invalid JSON for UID key=%s, data length=%d", key, len(data))
+		// Delete corrupt cache entry to prevent repeated failures
+		_ = c.cache.Delete(ctx, key)
+		return nil, fmt.Errorf("cache entry contains invalid JSON")
+	}
+
 	var metadata UIDListWithMetadata
 	if err := json.Unmarshal(data, &metadata); err != nil {
 		log.Printf("Failed to unmarshal cached UID list: %v", err)
+		// Delete corrupt cache entry
+		_ = c.cache.Delete(ctx, key)
 		return nil, err
+	}
+
+	// Integrity check: ensure UIDs slice is not nil
+	if metadata.UIDs == nil {
+		log.Printf("Cache integrity check failed: UIDs is nil for key=%s", key)
+		_ = c.cache.Delete(ctx, key)
+		return nil, fmt.Errorf("cache entry has nil UIDs")
 	}
 
 	log.Printf("UID cache hit: %d UIDs (modseq=%d)", len(metadata.UIDs), metadata.HighestModSeq)
@@ -237,8 +309,26 @@ func (c *UIDListCache) Get(ctx context.Context, key string) (*UIDListWithMetadat
 }
 
 // Set stores a UID list with metadata in cache
-func (c *UIDListCache) Set(ctx context.Context, key string, uids []uint32, count int, modSeq uint64, qresyncCapable bool) error {
+func (c *UIDListCache) Set(
+	ctx context.Context,
+	key string,
+	uids []uint32,
+	count int,
+	modSeq uint64,
+	qresyncCapable bool,
+	sortField string,
+	sortOrder string,
+	searchCriteria string,
+) error {
 	if c.cache == nil {
+		return nil
+	}
+
+	// Validate UIDs before caching to prevent corrupt cache entries
+	// Note: Empty UID list (len=0) is valid - e.g., empty folder, all messages deleted
+	// We distinguish between nil (error) and empty slice (valid result)
+	if uids == nil {
+		log.Printf("Cache write skipped: uids is nil for key=%s", key)
 		return nil
 	}
 
@@ -248,12 +338,28 @@ func (c *UIDListCache) Set(ctx context.Context, key string, uids []uint32, count
 		HighestModSeq:  modSeq,
 		QResyncCapable: qresyncCapable,
 		CachedAt:       time.Now(),
+		SortField:      sortField,
+		SortOrder:      sortOrder,
+		SearchCriteria: searchCriteria,
 	}
 
+	// Marshal first to validate data integrity
 	data, err := json.Marshal(metadata)
 	if err != nil {
 		log.Printf("Failed to marshal UID list for cache: %v", err)
 		return err
+	}
+
+	// Validate marshaled data is not empty and is valid JSON
+	if len(data) == 0 {
+		log.Printf("Cache write skipped: marshaled data is empty for key=%s", key)
+		return nil
+	}
+
+	// Quick JSON validation before writing to cache
+	if !isValidJSON(data) {
+		log.Printf("Cache write skipped: invalid JSON generated for key=%s", key)
+		return fmt.Errorf("invalid JSON generated during marshaling")
 	}
 
 	if err := c.cache.Set(ctx, key, data, TTLUIDList); err != nil {
@@ -261,7 +367,7 @@ func (c *UIDListCache) Set(ctx context.Context, key string, uids []uint32, count
 		return err
 	}
 
-	log.Printf("Cached UID list with metadata: key=%s, count=%d, modseq=%d", key, count, modSeq)
+	log.Printf("Cached UID list with metadata: key=%s, count=%d, modseq=%d, sort=%s %s", key, count, modSeq, sortField, sortOrder)
 	return nil
 }
 
@@ -341,6 +447,21 @@ func (c *MessageListCache) InvalidateAccount(ctx context.Context, accountID stri
 }
 
 // ==================== Helpers ====================
+
+// isValidJSON performs a quick validation that data is non-empty valid JSON
+func isValidJSON(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	// Quick check: valid JSON must start with {, [, or "
+	firstChar := data[0]
+	if firstChar != '{' && firstChar != '[' && firstChar != '"' {
+		return false
+	}
+	// Full validation: try to unmarshal into interface{}
+	var js json.RawMessage
+	return json.Unmarshal(data, &js) == nil
+}
 
 // buildCursorHash generates a short hash for the cursor
 func buildCursorHash(cursor string) string {

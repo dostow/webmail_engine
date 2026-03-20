@@ -13,6 +13,7 @@ type Config struct {
 	Server    ServerConfig    `json:"server"`
 	Redis     RedisConfig     `json:"redis"`
 	Pool      PoolConfig      `json:"pool"`
+	IMAP      IMAPConfig      `json:"imap"`
 	Scheduler SchedulerConfig `json:"scheduler"`
 	Security  SecurityConfig  `json:"security"`
 	Storage   StorageConfig   `json:"storage"`
@@ -81,6 +82,14 @@ type PoolConfig struct {
 	IdleTimeout     time.Duration `json:"idle_timeout"`
 	DialTimeout     time.Duration `json:"dial_timeout"`
 	CleanupInterval time.Duration `json:"cleanup_interval"`
+}
+
+// IMAPConfig holds IMAP-specific configuration
+type IMAPConfig struct {
+	ConnTimeout    time.Duration `json:"conn_timeout"`
+	ReadTimeout    time.Duration `json:"read_timeout"`
+	WriteTimeout   time.Duration `json:"write_timeout"`
+	CommandTimeout time.Duration `json:"command_timeout"` // Per-command timeout (SORT, SEARCH, FETCH)
 }
 
 // SchedulerConfig holds fair-use scheduler configuration
@@ -162,6 +171,12 @@ func DefaultConfig() *Config {
 			IdleTimeout:     5 * time.Minute,
 			DialTimeout:     30 * time.Second,
 			CleanupInterval: 1 * time.Minute,
+		},
+		IMAP: IMAPConfig{
+			ConnTimeout:    10 * time.Second,
+			ReadTimeout:    3 * time.Second,
+			WriteTimeout:   3 * time.Second,
+			CommandTimeout: 8 * time.Second, // Per-command timeout for SORT/SEARCH
 		},
 		Scheduler: SchedulerConfig{
 			Enabled:           true,

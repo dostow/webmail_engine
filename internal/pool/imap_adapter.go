@@ -174,6 +174,70 @@ func isConnectionError(err error) bool {
 	return false
 }
 
+// isRetryableError checks if an error is worth retrying
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+
+	// Network timeouts
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	// Connection errors
+	if strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "use of closed network connection") ||
+		strings.Contains(errStr, "i/o timeout") ||
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "broken pipe") {
+		return true
+	}
+
+	return false
+}
+
+// withRetry executes an IMAP operation with retry logic for transient errors
+// This is a generic helper function that retries operations on retryable errors
+func withRetry[T any](
+	operation func() (T, error),
+	maxRetries int,
+	operationName string,
+	invalidateFunc func(),
+) (T, error) {
+	var lastErr error
+	var zero T
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		result, err := operation()
+		if err == nil {
+			return result, nil
+		}
+
+		lastErr = err
+
+		// Check if error is retryable
+		if !isRetryableError(err) {
+			return zero, err
+		}
+
+		// Invalidate connection if it's a connection error
+		if isConnectionError(err) && invalidateFunc != nil {
+			invalidateFunc()
+		}
+
+		// Wait before retry (exponential backoff)
+		backoff := time.Duration(100*(attempt+1)) * time.Millisecond
+		log.Printf("IMAP %s failed (attempt %d/%d): %v, retrying in %v", operationName, attempt+1, maxRetries, err, backoff)
+		time.Sleep(backoff)
+	}
+
+	return zero, fmt.Errorf("%s failed after %d retries: %w", operationName, maxRetries, lastErr)
+}
+
 // SetInvalidateFunc sets the callback function to invalidate this session
 func (a *IMAPAdapter) SetInvalidateFunc(fn func()) {
 	a.mu.Lock()
@@ -439,14 +503,16 @@ func (a *IMAPAdapter) Search(criteria string) ([]uint32, error) {
 		return nil, fmt.Errorf("invalid search criteria: %w", err)
 	}
 
-	// Use UID SEARCH
-	searchData, err := a.client.UIDSearch(&searchCriteria, nil).Wait()
+	// Use UID SEARCH with retry logic
+	searchData, err := withRetry(
+		func() (*imap.SearchData, error) {
+			return a.client.UIDSearch(&searchCriteria, nil).Wait()
+		},
+		2, // maxRetries
+		"SEARCH",
+		a.invalidate, // Pass invalidate function
+	)
 	if err != nil {
-		if isConnectionError(err) {
-			a.mu.Unlock()
-			a.invalidate()
-			a.mu.Lock()
-		}
 		return nil, err
 	}
 
@@ -501,8 +567,15 @@ func (a *IMAPAdapter) SortMessages(sortBy models.SortField, sortOrder models.Sor
 		SortCriteria:   sortCriteria,
 	}
 
-	// Get sorted UIDs - UIDSort returns []uint32 directly
-	sortedUIDs, err := a.client.UIDSort(sortOptions).Wait()
+	// Get sorted UIDs with retry logic
+	sortedUIDs, err := withRetry(
+		func() ([]uint32, error) {
+			return a.client.UIDSort(sortOptions).Wait()
+		},
+		2, // maxRetries
+		"SORT",
+		a.invalidate, // Pass invalidate function
+	)
 	if err != nil {
 		return nil, err
 	}

@@ -16,6 +16,7 @@ import (
 
 	"webmail_engine/internal/cache"
 	"webmail_engine/internal/cachekey"
+	"webmail_engine/internal/messagecache"
 	"webmail_engine/internal/mimeparser"
 	"webmail_engine/internal/models"
 	"webmail_engine/internal/pool"
@@ -27,13 +28,15 @@ import (
 
 // MessageService handles message operations
 type MessageService struct {
-	mu             sync.RWMutex
-	sessions       *pool.IMAPSessionPool
-	cache          *cache.Cache
-	scheduler      *scheduler.FairUseScheduler
-	parser         *mimeparser.MIMEParser
-	storage        *storage.AttachmentStorage
-	accountService *AccountService
+	mu               sync.RWMutex
+	sessions         *pool.IMAPSessionPool
+	cache            *cache.Cache
+	messageListCache *messagecache.MessageListCache
+	uidListCache     *messagecache.UIDListCache
+	scheduler        *scheduler.FairUseScheduler
+	parser           *mimeparser.MIMEParser
+	storage          *storage.AttachmentStorage
+	accountService   *AccountService
 }
 
 // MessageServiceConfig holds service configuration
@@ -53,13 +56,19 @@ func NewMessageService(
 	parser := mimeparser.NewMIMEParser(config.TempStoragePath)
 	storage := storage.NewAttachmentStorage(config.TempStoragePath)
 
+	// Initialize cache helpers
+	messageListCache := messagecache.NewMessageListCache(cache)
+	uidListCache := messagecache.NewUIDListCache(cache)
+
 	return &MessageService{
-		sessions:       sessions,
-		cache:          cache,
-		scheduler:      scheduler,
-		accountService: accountService,
-		parser:         parser,
-		storage:        storage,
+		sessions:         sessions,
+		cache:            cache,
+		messageListCache: messageListCache,
+		uidListCache:     uidListCache,
+		scheduler:        scheduler,
+		accountService:   accountService,
+		parser:           parser,
+		storage:          storage,
 	}, nil
 }
 
@@ -152,24 +161,26 @@ func (s *MessageService) GetMessageList(
 		return nil, fmt.Errorf("failed to select folder: %w", err)
 	}
 
-	// Build cache key with UID validity to detect folder changes
 	uidValidity := folderInfo.UIDValidity
-	cacheKey := fmt.Sprintf("msglist:%s:%s:%s:%d:%s:%s:%d",
+	highestModSeq := folderInfo.HighestModSeq
+
+	// Build cache key WITHOUT modseq - modseq is checked on retrieval for smart invalidation
+	cacheKey := s.messageListCache.BuildKey(
 		accountID, folder, cursor, limit, sortBy, sortOrder, uidValidity)
 
-	// Try cache first (with UID validity check)
-	if s.cache != nil {
-		cachedList, err := s.getCachedMessageListByKey(ctx, cacheKey)
-		if err == nil && cachedList != nil {
+	log.Printf("Cache key built: accountID=%s, folder=%s, limit=%d, sortBy=%s, sortOrder=%s, uidValidity=%d, currentModSeq=%d",
+		accountID, folder, limit, sortBy, sortOrder, uidValidity, highestModSeq)
+
+	// Try cache first with smart modseq checking
+	if s.messageListCache != nil {
+		cachedList, cacheHit := s.messageListCache.Get(ctx, cacheKey, highestModSeq)
+		if cacheHit && cachedList != nil {
 			_ = cost // Don't deduct tokens for cache hit
-			log.Printf("Cache hit with valid UID validity %d for folder %s", uidValidity, folder)
+			log.Printf("Cache HIT with modseq %d for folder %s (page %d)", highestModSeq, folder, cachedList.CurrentPage)
 			return cachedList, nil
 		}
-		// Cache miss - could be due to UID validity change or first request
-		// Invalidate old cache entries (without current UID validity)
-		if err := s.invalidateMessageListCache(ctx, accountID, folder); err != nil {
-			log.Printf("Warning: failed to invalidate old cache: %v", err)
-		}
+		// Cache miss or page 1 with modseq change - fetch from IMAP
+		log.Printf("Cache MISS (modseq changed or first request)")
 	}
 
 	// Calculate pagination
@@ -183,43 +194,42 @@ func (s *MessageService) GetMessageList(
 	const maxUIDsPerFetch = 100
 
 	// Get UIDs from cache or IMAP with intelligent invalidation
-	uidCacheKey := fmt.Sprintf("uids:%s:%s:%d", accountID, folder, uidValidity)
+	uidCacheKey := s.uidListCache.BuildKey(accountID, folder, uidValidity)
 	var allUIDs []uint32
-	var currentMessageCount int
 
 	// Get current folder info for comparison
-	currentMessageCount = folderInfo.Messages
+	currentMessageCount := folderInfo.Messages
 	currentModSeq := folderInfo.HighestModSeq
 
-	if s.cache != nil {
+	if s.uidListCache != nil {
 		// Try to get cached UID list with full metadata
-		cachedUIDs, cachedCount, cachedModSeq, qresyncCapable, err := s.getCachedUIDListWithMetadata(ctx, uidCacheKey)
+		cachedMetadata, err := s.uidListCache.Get(ctx, uidCacheKey)
 
-		if err == nil && cachedUIDs != nil {
-			log.Printf("UID cache hit: %d UIDs for folder %s (modseq=%d)", len(cachedUIDs), folder, cachedModSeq)
+		if err == nil && cachedMetadata != nil {
+			log.Printf("UID cache hit: %d UIDs for folder %s (modseq=%d)", len(cachedMetadata.UIDs), folder, cachedMetadata.HighestModSeq)
 			refreshCache := false
 
 			// Phase 1: Check for significant count changes (deletions without QRESYNC)
-			countDiff := abs(currentMessageCount - cachedCount)
-			if countDiff > cachedCount/10 && cachedCount > 0 {
+			countDiff := abs(currentMessageCount - cachedMetadata.Count)
+			if countDiff > cachedMetadata.Count/10 && cachedMetadata.Count > 0 {
 				// More than 10% change - refresh cache
-				log.Printf("Cache invalidation: message count changed significantly (%d -> %d), refreshing", cachedCount, currentMessageCount)
+				log.Printf("Cache invalidation: message count changed significantly (%d -> %d), refreshing", cachedMetadata.Count, currentMessageCount)
 				refreshCache = true
-			} else if qresyncCapable && client.HasQResync() && currentModSeq > cachedModSeq {
+			} else if cachedMetadata.QResyncCapable && client.HasQResync() && currentModSeq > cachedMetadata.HighestModSeq {
 				// Phase 2: QRESYNC support - check for vanished messages
-				log.Printf("QRESYNC: modseq changed (%d -> %d), checking for vanished messages", cachedModSeq, currentModSeq)
-				vanished, err := client.UIDFetchVanished(cachedModSeq)
+				log.Printf("QRESYNC: modseq changed (%d -> %d), checking for vanished messages", cachedMetadata.HighestModSeq, currentModSeq)
+				vanished, err := client.UIDFetchVanished(cachedMetadata.HighestModSeq)
 				if err == nil && len(vanished) > 0 {
 					log.Printf("QRESYNC: %d messages vanished, updating cache", len(vanished))
 					// Remove vanished UIDs from cache
-					cachedUIDs = removeUIDsFromList(cachedUIDs, vanished)
+					cachedMetadata.UIDs = removeUIDsFromList(cachedMetadata.UIDs, vanished)
 					// Update cache with new UID list
-					if err := s.setCachedUIDListWithMetadata(ctx, uidCacheKey, cachedUIDs, len(cachedUIDs), currentModSeq, true, 5*time.Minute); err != nil {
+					if err := s.uidListCache.Set(ctx, uidCacheKey, cachedMetadata.UIDs, len(cachedMetadata.UIDs), currentModSeq, true); err != nil {
 						log.Printf("Warning: failed to update UID cache: %v", err)
 					}
-					allUIDs = cachedUIDs
+					allUIDs = cachedMetadata.UIDs
 				} else {
-					allUIDs = cachedUIDs
+					allUIDs = cachedMetadata.UIDs
 				}
 				goto UseUIDs
 			}
@@ -227,7 +237,7 @@ func (s *MessageService) GetMessageList(
 			if refreshCache {
 				// Fall through to IMAP fetch
 			} else {
-				allUIDs = cachedUIDs
+				allUIDs = cachedMetadata.UIDs
 				goto UseUIDs
 			}
 		}
@@ -256,7 +266,7 @@ func (s *MessageService) GetMessageList(
 		}
 
 		// Cache the UID list with metadata for 5 minutes
-		if err := s.setCachedUIDListWithMetadata(ctx, uidCacheKey, allUIDs, len(allUIDs), currentModSeq, client.HasQResync(), 5*time.Minute); err != nil {
+		if err := s.uidListCache.Set(ctx, uidCacheKey, allUIDs, len(allUIDs), currentModSeq, client.HasQResync()); err != nil {
 			log.Printf("Warning: failed to cache UID list: %v", err)
 		}
 	} else {
@@ -506,9 +516,9 @@ UseUIDs:
 	// Set UID validity for cache validation
 	messageList.UIDValidity = uidValidity
 
-	// Cache the message list with UID validity key
-	if s.cache != nil {
-		if err := s.setCachedMessageListByKey(ctx, cacheKey, messageList); err != nil {
+	// Cache the message list with current modseq for smart invalidation
+	if s.messageListCache != nil {
+		if err := s.messageListCache.Set(ctx, cacheKey, messageList, highestModSeq); err != nil {
 			log.Printf("Warning: failed to cache message list: %v", err)
 		}
 	}
@@ -914,87 +924,9 @@ func (s *MessageService) GetAttachmentAccess(
 	}, nil
 }
 
-// getCachedMessageListByKey tries to get message list from cache using a pre-built key
-func (s *MessageService) getCachedMessageListByKey(
-	ctx context.Context,
-	cacheKey string,
-) (*models.MessageList, error) {
-	// Try to get from cache
-	data, err := s.cache.Get(ctx, cacheKey)
-	if err != nil {
-		return nil, err // Cache miss or error
-	}
-
-	// Unmarshal message list
-	var messageList models.MessageList
-	if err := json.Unmarshal(data, &messageList); err != nil {
-		log.Printf("Failed to unmarshal cached message list: %v", err)
-		return nil, err
-	}
-
-	// Check freshness (cache is stale if older than 5 minutes)
-	if time.Since(messageList.Freshness) > 5*time.Minute {
-		log.Printf("Cached message list is stale (age: %v)", time.Since(messageList.Freshness))
-		return nil, nil
-	}
-
-	log.Printf("Cache hit for message list: key=%s, count=%d", cacheKey, len(messageList.Messages))
-	return &messageList, nil
-}
-
-// getCachedMessageList tries to get message list from cache (legacy method)
-func (s *MessageService) getCachedMessageList(
-	ctx context.Context,
-	accountID string,
-	folder string,
-	cursor string,
-	limit int,
-	sortBy models.SortField,
-	sortOrder models.SortOrder,
-) (*models.MessageList, error) {
-	// Build cache key for message list (without UID validity - for backward compatibility)
-	cacheKey := fmt.Sprintf("msglist:%s:%s:%s:%d:%s:%s", accountID, folder, cursor, limit, sortBy, sortOrder)
-	return s.getCachedMessageListByKey(ctx, cacheKey)
-}
-
-// setCachedMessageList stores message list in cache
-func (s *MessageService) setCachedMessageList(
-	ctx context.Context,
-	accountID string,
-	folder string,
-	cursor string,
-	limit int,
-	sortBy models.SortField,
-	sortOrder models.SortOrder,
-	messageList *models.MessageList,
-) error {
-	// Build cache key for message list (without UID validity for general caching)
-	cacheKey := fmt.Sprintf("msglist:%s:%s:%s:%d:%s:%s", accountID, folder, cursor, limit, sortBy, sortOrder)
-	return s.setCachedMessageListByKey(ctx, cacheKey, messageList)
-}
-
-// setCachedMessageListByKey stores message list in cache using a pre-built key
-func (s *MessageService) setCachedMessageListByKey(
-	ctx context.Context,
-	cacheKey string,
-	messageList *models.MessageList,
-) error {
-	// Marshal message list
-	data, err := json.Marshal(messageList)
-	if err != nil {
-		log.Printf("Failed to marshal message list for cache: %v", err)
-		return err
-	}
-
-	// Store in cache with 5 minute TTL
-	if err := s.cache.Set(ctx, cacheKey, data, 5*time.Minute); err != nil {
-		log.Printf("Failed to cache message list: %v", err)
-		return err
-	}
-
-	log.Printf("Cached message list: key=%s, count=%d", cacheKey, len(messageList.Messages))
-	return nil
-}
+// ==================== Legacy Cache Methods (Deprecated) ====================
+// These methods are kept for backward compatibility but should not be used.
+// Use s.messageListCache and s.uidListCache instead.
 
 // getCachedUIDList retrieves cached UID list for a folder
 func (s *MessageService) getCachedUIDList(ctx context.Context, cacheKey string) ([]uint32, error) {
@@ -1059,70 +991,6 @@ func (s *MessageService) setCachedUIDList(
 
 	log.Printf("Cached UID list: key=%s, count=%d", cacheKey, len(uids))
 	return nil
-}
-
-// setCachedUIDListWithMetadata stores UID list with full metadata (QRESYNC support)
-func (s *MessageService) setCachedUIDListWithMetadata(
-	ctx context.Context,
-	cacheKey string,
-	uids []uint32,
-	messageCount int,
-	highestModSeq uint64,
-	qresyncCapable bool,
-	ttl time.Duration,
-) error {
-	cachedData := struct {
-		UIDs           []uint32 `json:"uids"`
-		MessageCount   int      `json:"message_count"`
-		HighestModSeq  uint64   `json:"highest_modseq,omitempty"`
-		CachedAt       int64    `json:"cached_at"`
-		QResyncCapable bool     `json:"qresync_capable"`
-	}{
-		UIDs:           uids,
-		MessageCount:   messageCount,
-		HighestModSeq:  highestModSeq,
-		CachedAt:       time.Now().Unix(),
-		QResyncCapable: qresyncCapable,
-	}
-
-	data, err := json.Marshal(cachedData)
-	if err != nil {
-		log.Printf("Failed to marshal UID list for cache: %v", err)
-		return err
-	}
-
-	if err := s.cache.Set(ctx, cacheKey, data, ttl); err != nil {
-		log.Printf("Failed to cache UID list: %v", err)
-		return err
-	}
-
-	log.Printf("Cached UID list with metadata: key=%s, count=%d, modseq=%d", cacheKey, len(uids), highestModSeq)
-	return nil
-}
-
-// getCachedUIDListWithMetadata retrieves cached UID list with full metadata
-func (s *MessageService) getCachedUIDListWithMetadata(
-	ctx context.Context,
-	cacheKey string,
-) (uids []uint32, messageCount int, highestModSeq uint64, qresyncCapable bool, err error) {
-	data, err := s.cache.Get(ctx, cacheKey)
-	if err != nil {
-		return nil, 0, 0, false, err
-	}
-
-	var cachedData struct {
-		UIDs           []uint32 `json:"uids"`
-		MessageCount   int      `json:"message_count"`
-		HighestModSeq  uint64   `json:"highest_modseq,omitempty"`
-		CachedAt       int64    `json:"cached_at"`
-		QResyncCapable bool     `json:"qresync_capable"`
-	}
-
-	if err := json.Unmarshal(data, &cachedData); err != nil {
-		return nil, 0, 0, false, err
-	}
-
-	return cachedData.UIDs, cachedData.MessageCount, cachedData.HighestModSeq, cachedData.QResyncCapable, nil
 }
 
 // generateQueryHash generates a hash for search query caching

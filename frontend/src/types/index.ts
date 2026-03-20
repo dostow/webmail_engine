@@ -197,6 +197,7 @@ export interface SystemHealthResponse {
 
 export interface ComponentHealth {
   status: 'healthy' | 'degraded' | 'unhealthy';
+  details: any;
   message?: string;
   latency?: number;
   error_rate?: number;

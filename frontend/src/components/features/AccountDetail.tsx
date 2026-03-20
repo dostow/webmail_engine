@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/Alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { ScrollableContent } from '@/components/ui/scrollable-content';
 import { ServerCapabilitiesDisplay } from './accounts/ServerCapabilitiesDisplay';
 import { SyncSettingsDialog } from './accounts/SyncSettingsDialog';
 import { UpdateCredentialsDialog } from './accounts/UpdateCredentialsDialog';
@@ -113,7 +113,7 @@ export function AccountDetailView() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="h-full flex flex-col min-h-0">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="space-y-1">
@@ -166,226 +166,231 @@ export function AccountDetailView() {
 
       {/* Account Status Alert */}
       {account?.status === 'error' && (
-        <Alert>
-          <AlertTitle>Connection Error</AlertTitle>
-          <AlertDescription>
-            This account is experiencing errors. Check your connection settings and try refreshing.
-          </AlertDescription>
-        </Alert>
+        <div className="shrink-0 mb-4">
+          <Alert>
+            <AlertTitle>Connection Error</AlertTitle>
+            <AlertDescription>
+              This account is experiencing errors. Check your connection settings and try refreshing.
+            </AlertDescription>
+          </Alert>
+        </div>
       )}
 
+      {/* <div className="flex-1 overflow-hidden pb-8"> */}
       {/* Main Content Tabs */}
-      <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList>
+      <Tabs defaultValue="overview" className="space-y-4 h-full flex flex-1 flex-col min-h-0">
+        <TabsList className="shrink-0">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="folders">Synced Folders ({folders.length})</TabsTrigger>
           <TabsTrigger value="server">Server Info</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="overview" className="space-y-4">
-          <ScrollArea className="h-[600px] pr-4">
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {/* Connection Info */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">IMAP Configuration</CardTitle>
-                  <CardDescription>Incoming mail server settings</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Host</span>
-                    <span className="font-medium">{account?.imap_config.host}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Port</span>
-                    <span className="font-medium">{account?.imap_config.port}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Encryption</span>
-                    <Badge variant="outline" className="capitalize">
-                      {account?.imap_config.encryption}
-                    </Badge>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Username</span>
-                    <span className="font-medium">{account?.imap_config.username}</span>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* SMTP Info */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">SMTP Configuration</CardTitle>
-                  <CardDescription>Outgoing mail server settings</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Host</span>
-                    <span className="font-medium">{account?.smtp_config.host}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Port</span>
-                    <span className="font-medium">{account?.smtp_config.port}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Encryption</span>
-                    <Badge variant="outline" className="capitalize">
-                      {account?.smtp_config.encryption}
-                    </Badge>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Username</span>
-                    <span className="font-medium">{account?.smtp_config.username}</span>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Account Stats */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Account Information</CardTitle>
-                  <CardDescription>General account details</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Auth Type</span>
-                    <Badge variant="outline" className="capitalize">
-                      {account?.auth_type || 'password'}
-                    </Badge>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Created</span>
-                    <span className="font-medium">{formatDate(account?.created_at || '')}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Last Sync</span>
-                    <span className="font-medium">
-                      {account?.last_sync_at ? formatDate(account.last_sync_at) : 'Never'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Synced Folders</span>
-                    <Badge>{folders.length}</Badge>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Quick Stats */}
-            {folders.length > 0 && (
-              <Card className="mt-4">
-                <CardHeader>
-                  <CardTitle>Folder Overview</CardTitle>
-                  <CardDescription>Summary of synchronized mailboxes</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                    {folders.slice(0, 6).map((folder) => (
-                      <div
-                        key={folder.name}
-                        className="flex items-center justify-between p-3 rounded-lg border bg-card"
-                      >
-                        <div className="space-y-0.5">
-                          <div className="font-medium text-sm">{folder.name}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {folder.is_initialized ? 'Synced' : 'Pending'}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-sm font-medium">{folder.messages}</div>
-                          <div className="text-xs text-muted-foreground">messages</div>
-                        </div>
+        <TabsContent value="overview" className="space-y-0 flex-1 mt-0 overflow-hidden">
+          <Card className="h-full flex flex-col">
+            <CardHeader className="shrink-0">
+              <CardTitle>Account Overview</CardTitle>
+              <CardDescription>Connection settings and account information</CardDescription>
+            </CardHeader>
+            <CardContent className="flex-1 overflow-hidden p-0">
+              <ScrollableContent heightStrategy="flex" className="h-full p-6">
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {/* Connection Info */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-lg">IMAP Configuration</CardTitle>
+                      <CardDescription>Incoming mail server settings</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Host</span>
+                        <span className="font-medium">{account?.imap_config.host}</span>
                       </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </ScrollArea>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Port</span>
+                        <span className="font-medium">{account?.imap_config.port}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Encryption</span>
+                        <Badge variant="outline" className="capitalize">
+                          {account?.imap_config.encryption}
+                        </Badge>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Username</span>
+                        <span className="font-medium">{account?.imap_config.username}</span>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* SMTP Info */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-lg">SMTP Configuration</CardTitle>
+                      <CardDescription>Outgoing mail server settings</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Host</span>
+                        <span className="font-medium">{account?.smtp_config.host}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Port</span>
+                        <span className="font-medium">{account?.smtp_config.port}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Encryption</span>
+                        <Badge variant="outline" className="capitalize">
+                          {account?.smtp_config.encryption}
+                        </Badge>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Username</span>
+                        <span className="font-medium">{account?.smtp_config.username}</span>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Account Stats */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-lg">Account Information</CardTitle>
+                      <CardDescription>General account details</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Auth Type</span>
+                        <Badge variant="outline" className="capitalize">
+                          {account?.auth_type || 'password'}
+                        </Badge>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Created</span>
+                        <span className="font-medium">{formatDate(account?.created_at || '')}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Last Sync</span>
+                        <span className="font-medium">
+                          {account?.last_sync_at ? formatDate(account.last_sync_at) : 'Never'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Synced Folders</span>
+                        <Badge>{folders.length}</Badge>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                {/* Quick Stats */}
+                {folders.length > 0 && (
+                  <Card className="mt-4">
+                    <CardHeader>
+                      <CardTitle>Folder Overview</CardTitle>
+                      <CardDescription>Summary of synchronized mailboxes</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                        {folders.slice(0, 6).map((folder) => (
+                          <div
+                            key={folder.name}
+                            className="flex items-center justify-between p-3 rounded-lg border bg-card"
+                          >
+                            <div className="space-y-0.5">
+                              <div className="font-medium text-sm">{folder.name}</div>
+                              <div className="text-xs text-muted-foreground">
+                                {folder.is_initialized ? 'Synced' : 'Pending'}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-sm font-medium">{folder.messages}</div>
+                              <div className="text-xs text-muted-foreground">messages</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+              </ScrollableContent>
+            </CardContent>
+          </Card>
         </TabsContent>
 
-        <TabsContent value="folders" className="space-y-0">
-          <Card className="h-[calc(100vh-250px)] flex flex-col">
-            <CardHeader className="flex-shrink-0 pb-3">
+        <TabsContent value="folders" className="space-y-0 flex-1 mt-0  overflow-hidden">
+          <Card className="h-full flex flex-col">
+            <CardHeader className="shrink-0">
               <CardTitle>Synchronized Folders</CardTitle>
               <CardDescription>
                 Mailboxes being synchronized for this account
               </CardDescription>
             </CardHeader>
             <CardContent className="flex-1 overflow-hidden p-0">
-              <ScrollArea className="h-full w-full">
-                <div className="p-6 pt-0">
-                  {folders.length === 0 ? (
-                    <div className="text-center py-8 text-muted-foreground">
-                      No folders synchronized yet. Folders will appear here once sync begins.
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {folders.map((folder) => (
-                        <div
-                          key={folder.name}
-                          className="flex items-center justify-between p-4 rounded-lg border"
-                        >
-                          <div className="flex items-center gap-3">
-                            <svg className="h-5 w-5 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                            </svg>
-                            <div>
-                              <div className="font-medium">{folder.name}</div>
-                              <div className="text-xs text-muted-foreground">
-                                Last sync: {formatRelativeTime(folder.last_sync)}
-                              </div>
+              <ScrollableContent heightStrategy="flex" className="h-full p-6">
+                {folders.length === 0 ? (
+                  <div className="text-center text-muted-foreground">
+                    No folders synchronized yet. Folders will appear here once sync begins.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {folders.map((folder) => (
+                      <div
+                        key={folder.name}
+                        className="flex items-center justify-between p-4 rounded-lg border"
+                      >
+                        <div className="flex items-center gap-3">
+                          <svg className="h-5 w-5 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                          </svg>
+                          <div>
+                            <div className="font-medium">{folder.name}</div>
+                            <div className="text-xs text-muted-foreground">
+                              Last sync: {formatRelativeTime(folder.last_sync)}
                             </div>
-                          </div>
-                          <div className="flex items-center gap-4">
-                            <div className="text-right">
-                              <div className="text-sm font-medium">{folder.messages.toLocaleString()}</div>
-                              <div className="text-xs text-muted-foreground">messages</div>
-                            </div>
-                            {folder.unseen > 0 && (
-                              <Badge variant="default">{folder.unseen} unread</Badge>
-                            )}
-                            <Badge variant={folder.is_initialized ? 'default' : 'secondary'}>
-                              {folder.is_initialized ? 'Synced' : 'Pending'}
-                            </Badge>
                           </div>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </ScrollArea>
+                        <div className="flex items-center gap-4">
+                          <div className="text-right">
+                            <div className="text-sm font-medium">{folder.messages.toLocaleString()}</div>
+                            <div className="text-xs text-muted-foreground">messages</div>
+                          </div>
+                          {folder.unseen > 0 && (
+                            <Badge variant="default">{folder.unseen} unread</Badge>
+                          )}
+                          <Badge variant={folder.is_initialized ? 'default' : 'secondary'}>
+                            {folder.is_initialized ? 'Synced' : 'Pending'}
+                          </Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </ScrollableContent>
             </CardContent>
           </Card>
         </TabsContent>
 
-        <TabsContent value="server" className="space-y-0">
-          <Card className="h-[calc(100vh-250px)] flex flex-col">
-            <CardHeader className="flex-shrink-0 pb-3">
+        <TabsContent value="server" className="space-y-0 flex-1 mt-0 overflow-hidden">
+          <Card className="h-full flex flex-col">
+            <CardHeader className="shrink-0">
               <CardTitle>Server Capabilities</CardTitle>
               <CardDescription>IMAP server features and extensions</CardDescription>
             </CardHeader>
-            <CardContent className="flex-1 overflow-hidden p-0">
-              <ScrollArea className="h-full w-full">
-                <div className="p-6 pt-0">
-                  {account?.server_capabilities ? (
-                    <ServerCapabilitiesDisplay accountId={accountId!} initialCapabilities={account.server_capabilities} />
-                  ) : (
-                    <div className="text-center py-8 text-muted-foreground">
-                      Server capabilities not available
-                    </div>
-                  )}
+            <CardContent className="flex-1 overflow-auto p-6">
+              {account?.server_capabilities ? (
+                <ServerCapabilitiesDisplay accountId={accountId!} initialCapabilities={account.server_capabilities} />
+              ) : (
+                <div className="text-center text-muted-foreground">
+                  Server capabilities not available
                 </div>
-              </ScrollArea>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
 
-        <TabsContent value="settings" className="space-y-0">
-          <Card className="h-[calc(100vh-250px)] flex flex-col">
-            <CardHeader className="flex-shrink-0 pb-3">
+        <TabsContent value="settings" className="space-y-0 flex-1 mt-0 overflow-hidden">
+          <Card className="h-full flex flex-col">
+            <CardHeader className="shrink-0">
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle>Sync Settings</CardTitle>
@@ -400,43 +405,41 @@ export function AccountDetailView() {
               </div>
             </CardHeader>
             <CardContent className="flex-1 overflow-hidden p-0">
-              <ScrollArea className="h-full w-full">
-                <div className="p-6 pt-0">
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div className="space-y-1">
-                      <div className="text-sm font-medium">Auto Sync</div>
-                      <Badge variant={account?.sync_settings.auto_sync ? 'default' : 'secondary'}>
-                        {account?.sync_settings.auto_sync ? 'Enabled' : 'Disabled'}
-                      </Badge>
+              <ScrollableContent heightStrategy="flex" className="h-full p-6">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-1">
+                    <div className="text-sm font-medium">Auto Sync</div>
+                    <Badge variant={account?.sync_settings.auto_sync ? 'default' : 'secondary'}>
+                      {account?.sync_settings.auto_sync ? 'Enabled' : 'Disabled'}
+                    </Badge>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-sm font-medium">Sync Interval</div>
+                    <div className="text-sm text-muted-foreground">
+                      {formatSyncInterval(account?.sync_settings.sync_interval || 0)}
                     </div>
-                    <div className="space-y-1">
-                      <div className="text-sm font-medium">Sync Interval</div>
-                      <div className="text-sm text-muted-foreground">
-                        {formatSyncInterval(account?.sync_settings.sync_interval || 0)}
-                      </div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-sm font-medium">Historical Scope</div>
+                    <div className="text-sm text-muted-foreground">
+                      {account && account.sync_settings.historical_scope && account.sync_settings.historical_scope > 0
+                        ? `${account.sync_settings.historical_scope} days`
+                        : 'All messages'}
                     </div>
-                    <div className="space-y-1">
-                      <div className="text-sm font-medium">Historical Scope</div>
-                      <div className="text-sm text-muted-foreground">
-                        {account && account.sync_settings.historical_scope && account.sync_settings.historical_scope > 0
-                          ? `${account.sync_settings.historical_scope} days`
-                          : 'All messages'}
-                      </div>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-sm font-medium">Max Message Size</div>
-                      <div className="text-sm text-muted-foreground">
-                        {formatFileSize(account?.sync_settings.max_message_size || 0)}
-                      </div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-sm font-medium">Max Message Size</div>
+                    <div className="text-sm text-muted-foreground">
+                      {formatFileSize(account?.sync_settings.max_message_size || 0)}
                     </div>
                   </div>
                 </div>
-              </ScrollArea>
+              </ScrollableContent>
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
-
+      {/* </div> */}
       {/* Dialogs */}
       <SyncSettingsDialog
         account={account!}

@@ -1,5 +1,6 @@
 import { useLoaderData, useNavigation } from 'react-router-dom';
 import { Card, StatusBadge, Button } from '../ui';
+import { ScrollableContent } from '@/components/ui/scrollable-content';
 import type { SystemHealthResponse, AccountStats } from '../../types';
 
 interface HealthData {
@@ -25,9 +26,9 @@ export function HealthView() {
   };
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="h-full flex flex-col min-h-0 gap-6">
       {health && (
-        <Card>
+        <Card className="shrink-0">
           <div className="flex items-center justify-between border-b px-6 py-4">
             <h3 className="text-lg font-semibold">System Health</h3>
           </div>
@@ -79,11 +80,11 @@ export function HealthView() {
         </Card>
       )}
 
-      <Card>
-        <div className="flex items-center justify-between border-b px-6 py-4">
+      <Card className="flex flex-col">
+        <div className="flex items-center justify-between border-b px-6 py-4 shrink-0">
           <h3 className="text-lg font-semibold">Account Status</h3>
         </div>
-        <div className="p-6">
+        <ScrollableContent heightStrategy="flex" className="p-6">
           {accountStats.length === 0 ? (
             <div className="py-12 text-center text-muted-foreground">
               <p>No accounts configured</p>
@@ -111,10 +112,10 @@ export function HealthView() {
               ))}
             </div>
           )}
-        </div>
+        </ScrollableContent>
       </Card>
 
-      <Card>
+      <Card className="shrink-0">
         <div className="flex items-center justify-end border-b px-6 py-4">
           <Button variant="outline" onClick={() => window.location.reload()} disabled={loading}>
             <svg className="mr-2 size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

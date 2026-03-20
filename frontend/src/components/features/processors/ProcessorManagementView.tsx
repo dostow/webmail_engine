@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { ScrollableContent } from '@/components/ui/scrollable-content';
 import {
   getAccountProcessors,
   listProcessorTypes,
@@ -83,8 +84,8 @@ export function ProcessorManagementView() {
   const availableToAdd = availableTypes.filter((t) => !existingTypes.has(t.type));
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
+    <div className="h-full flex flex-col min-h-0 gap-6">
+      <div className="flex items-center justify-between shrink-0">
         <div>
           <div className="flex items-center gap-2 mb-1">
             <Link to={`/accounts/${accountId}`}>
@@ -124,7 +125,7 @@ export function ProcessorManagementView() {
           </div>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2">
+        <ScrollableContent heightStrategy="flex" className="grid gap-4 md:grid-cols-2">
           {processors.map((processor) => (
             <ProcessorCard
               key={processor.type}
@@ -134,7 +135,7 @@ export function ProcessorManagementView() {
               onDelete={handleDelete}
             />
           ))}
-        </div>
+        </ScrollableContent>
       )}
 
       {showWizard && (

@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { ServerCapabilitiesDisplay } from './accounts/ServerCapabilitiesDisplay';
 import type { Account } from '@/types';
 import * as api from '@/services/api';
@@ -20,16 +19,16 @@ export function ServerDetailView() {
       setLoading(true);
       setError(null);
       const data = await api.listAccounts();
-      
+
       // Filter accounts by server key
       const filtered = data.filter(acc => {
         const host = acc.imap_config.host.toLowerCase();
         const port = acc.imap_config.port;
         return `${host}:${port}` === serverKey;
       });
-      
+
       setAccounts(filtered);
-      
+
       // Select first account by default
       if (filtered.length > 0 && !selectedAccount) {
         setSelectedAccount(filtered[0].id);
@@ -219,22 +218,20 @@ export function ServerDetailView() {
           <div className="border-b px-4 py-3">
             <h4 className="font-semibold text-sm">Accounts</h4>
           </div>
-          <ScrollArea className="h-[500px]">
-            <div className="p-2 space-y-1">
+          <div className="overflow-auto max-h-[calc(100vh-400px)] p-2">
+            <div className="space-y-1">
               {accounts.map(account => (
                 <button
                   key={account.id}
                   onClick={() => setSelectedAccount(account.id)}
-                  className={`w-full text-left p-3 rounded-lg transition-colors ${
-                    selectedAccount === account.id
-                      ? 'bg-primary text-primary-foreground'
-                      : 'hover:bg-muted'
-                  }`}
+                  className={`w-full text-left p-3 rounded-lg transition-colors ${selectedAccount === account.id
+                    ? 'bg-primary text-primary-foreground'
+                    : 'hover:bg-muted'
+                    }`}
                 >
                   <div className="font-medium text-sm truncate">{account.email}</div>
-                  <div className={`text-xs mt-1 ${
-                    selectedAccount === account.id ? 'text-primary-foreground/70' : 'text-muted-foreground'
-                  }`}>
+                  <div className={`text-xs mt-1 ${selectedAccount === account.id ? 'text-primary-foreground/70' : 'text-muted-foreground'
+                    }`}>
                     {account.server_capabilities?.supports_qresync ? (
                       <span className="text-green-600">● QRESYNC</span>
                     ) : account.server_capabilities?.supports_condstore ? (
@@ -246,7 +243,7 @@ export function ServerDetailView() {
                 </button>
               ))}
             </div>
-          </ScrollArea>
+          </div>
         </Card>
 
         {/* Capabilities Display */}
@@ -265,8 +262,8 @@ export function ServerDetailView() {
           </div>
           <div className="p-4">
             {selectedAccount && (
-              <ServerCapabilitiesDisplay 
-                accountId={selectedAccount} 
+              <ServerCapabilitiesDisplay
+                accountId={selectedAccount}
                 initialCapabilities={selectedAccountData?.server_capabilities}
               />
             )}

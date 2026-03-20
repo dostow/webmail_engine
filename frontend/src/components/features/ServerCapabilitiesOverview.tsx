@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { ScrollableContent } from '@/components/ui/scrollable-content';
 import type { Account, ServerCapabilities } from '@/types';
 import * as api from '@/services/api';
 
@@ -76,7 +77,7 @@ export function ServerCapabilitiesOverviewView() {
     }
 
     const capabilityKeys = Object.keys(CAPABILITY_INFO).filter(k => k.startsWith('supports_')) as Array<keyof ServerCapabilities>;
-    
+
     const newStats: CapabilityStats[] = capabilityKeys.map((key) => {
       const supportedBy = accounts
         .filter(acc => acc.server_capabilities?.[key] === true)
@@ -137,9 +138,9 @@ export function ServerCapabilitiesOverviewView() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="h-full flex flex-col min-h-0 gap-6">
       {/* Header */}
-      <Card>
+      <Card className="shrink-0">
         <div className="flex items-center justify-between border-b px-6 py-4">
           <h3 className="text-lg font-semibold">Server Capabilities Overview</h3>
           <div className="flex items-center gap-2">
@@ -190,15 +191,15 @@ export function ServerCapabilitiesOverviewView() {
       </Card>
 
       {/* Capability Stats */}
-      <Card>
-        <div className="border-b px-6 py-4">
+      <Card className="flex flex-col">
+        <div className="border-b px-6 py-4 shrink-0">
           <h4 className="font-semibold">Capability Statistics</h4>
           <p className="text-sm text-muted-foreground mt-1">
             Shows which IMAP extensions are supported across your email accounts
           </p>
         </div>
 
-        <div className="p-6">
+        <ScrollableContent heightStrategy="flex" className="p-6">
           {stats.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               No capability data available. Click "Refresh All Capabilities" to detect.
@@ -245,12 +246,12 @@ export function ServerCapabilitiesOverviewView() {
               ))}
             </div>
           )}
-        </div>
+        </ScrollableContent>
       </Card>
 
       {/* Accounts without capabilities */}
       {accounts.some(a => !a.server_capabilities) && (
-        <Card>
+        <Card className="shrink-0">
           <div className="border-b px-6 py-4">
             <h4 className="font-semibold">Accounts Pending Detection</h4>
           </div>

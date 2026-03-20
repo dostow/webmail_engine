@@ -3,6 +3,12 @@ import { Button } from '@/components/ui/Button';
 import { Avatar } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useTriageStore } from './useTriageStore';
 import { useEmailToast } from '@/hooks/useToast';
 import { formatFullDate } from '@/utils/format';
@@ -31,6 +37,52 @@ function getSenderDisplayName(from?: Message['from']): string {
 function getRecipientDisplayName(to?: MessageDetail['to']): string {
   if (!to?.[0]) return 'Me';
   return to[0].name || to[0].address || 'Me';
+}
+
+/** Displays email headers in a modal dialog. */
+function EmailHeadersDialog({
+  headers,
+  open,
+  onOpenChange,
+}: {
+  headers: Record<string, string> | undefined;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const headerEntries = headers ? Object.entries(headers) : [];
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl lg:min-w-[40vw] max-h-[80vh] overflow-hidden flex flex-col">
+        <DialogHeader>
+          <DialogTitle>Email Headers</DialogTitle>
+        </DialogHeader>
+        <div className="flex-1 overflow-y-auto mt-2 p-2 no-scrollbar">
+          {headerEntries.length > 0 ? (
+            <div className="flex flex-col gap-1.5">
+              {headerEntries.map(([key, value]) => (
+                <div
+                  key={key}
+                  className="flex gap-3 py-2 border-b last:border-0"
+                >
+                  <span className="font-semibold text-muted-foreground shrink-0 sm:w-20 w-30">
+                    {key}
+                  </span>
+                  <span className="break-all whitespace-pre-wrap">
+                    {value}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground text-center py-8">
+              No headers available
+            </p>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 /** Renders HTML email body in a sandboxed iframe that fills the available space. */
@@ -102,6 +154,7 @@ export function MessageDetailPane({ accountId, messageUid }: MessageDetailPanePr
   const [detail, setDetail] = useState<MessageDetail | null>(null);
   const [bodyLoading, setBodyLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [headersOpen, setHeadersOpen] = useState(false);
 
   // Pull the list-row data from the store for instant header rendering
   const { selectedMessage: initialMessage, openCompose, clearAll } = useTriageStore();
@@ -221,6 +274,18 @@ export function MessageDetailPane({ accountId, messageUid }: MessageDetailPanePr
             Forward
           </Button>
           <Button
+            onClick={() => setHeadersOpen(true)}
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs gap-1"
+            disabled={!detail?.headers}
+          >
+            <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Headers
+          </Button>
+          <Button
             onClick={handleDelete}
             variant="ghost"
             size="sm"
@@ -290,6 +355,13 @@ export function MessageDetailPane({ accountId, messageUid }: MessageDetailPanePr
           </div>
         </div>
       )}
+
+      {/* Email Headers Modal */}
+      <EmailHeadersDialog
+        headers={detail?.headers}
+        open={headersOpen}
+        onOpenChange={setHeadersOpen}
+      />
     </div>
   );
 }

@@ -33,7 +33,7 @@ function getRecipientDisplayName(to?: MessageDetail['to']): string {
   return to[0].name || to[0].address || 'Me';
 }
 
-/** Renders HTML email body in a sandboxed iframe that auto-sizes to its content. */
+/** Renders HTML email body in a sandboxed iframe that fills the available space. */
 function EmailIframe({ html }: { html: string }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -64,18 +64,28 @@ function EmailIframe({ html }: { html: string }) {
 <body>${html}</body>
 </html>`;
 
-  const resizeIframe = useCallback(() => {
-    const iframe = iframeRef.current;
-    if (!iframe?.contentDocument?.body) return;
-    iframe.style.height = `${iframe.contentDocument.body.scrollHeight}px`;
-  }, []);
-
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
-    iframe.addEventListener('load', resizeIframe);
-    return () => iframe.removeEventListener('load', resizeIframe);
-  }, [resizeIframe]);
+
+    const handleLoad = () => {
+      iframe.contentWindow?.addEventListener('click', (e: MouseEvent) => {
+        const target = e.target as HTMLElement;
+        const link = target.closest('a');
+        if (link) {
+          e.preventDefault();
+          e.stopPropagation();
+          const href = link.getAttribute('href');
+          if (href) {
+            window.open(href, '_blank', 'noopener,noreferrer');
+          }
+        }
+      });
+    };
+
+    iframe.addEventListener('load', handleLoad);
+    return () => iframe.removeEventListener('load', handleLoad);
+  }, []);
 
   return (
     <iframe
@@ -83,9 +93,7 @@ function EmailIframe({ html }: { html: string }) {
       srcDoc={wrappedHtml}
       sandbox="allow-same-origin"
       title="Email body"
-      className="w-full border-0"
-      style={{ minHeight: 200 }}
-      onLoad={resizeIframe}
+      className="w-full h-full border-0"
     />
   );
 }
@@ -232,7 +240,7 @@ export function MessageDetailPane({ accountId, messageUid }: MessageDetailPanePr
       </div>
 
       {/* ── Body area ── */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto bg-white/90 flex flex-col">
         {bodyLoading ? (
           // Body still loading — show skeleton below the already-visible header
           <div className="p-5 flex flex-col gap-3">
@@ -249,10 +257,12 @@ export function MessageDetailPane({ accountId, messageUid }: MessageDetailPanePr
             <Button variant="outline" size="sm" onClick={fetchDetail}>Retry</Button>
           </div>
         ) : detail?.html_body ? (
-          // HTML body rendered in sandboxed iframe — no style contamination
-          <EmailIframe html={detail.html_body} />
+          // HTML body rendered in sandboxed iframe — fills available space
+          <div className="flex-1 min-h-0">
+            <EmailIframe html={detail.html_body} />
+          </div>
         ) : (
-          <pre className="p-5 whitespace-pre-wrap font-sans text-sm leading-relaxed text-foreground">
+          <pre className="flex-1 min-h-0 bg-background p-5 whitespace-pre-wrap font-sans text-sm leading-relaxed text-foreground overflow-y-auto">
             {detail?.text_body || '(No content)'}
           </pre>
         )}
@@ -273,7 +283,7 @@ export function MessageDetailPane({ accountId, messageUid }: MessageDetailPanePr
                 <svg className="h-3.5 w-3.5 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                 </svg>
-                <span className="font-medium truncate max-w-[140px]">{att.filename}</span>
+                <span className="font-medium truncate max-w-35">{att.filename}</span>
                 <span className="text-muted-foreground shrink-0">{(att.size / 1024).toFixed(1)} KB</span>
               </div>
             ))}

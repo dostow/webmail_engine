@@ -304,13 +304,18 @@ func (s *AccountService) GetAccountWithCredentials(ctx context.Context, accountI
 
 			// Re-encrypt the password for future use
 			if encrypted, encErr := s.encryptor.Encrypt(password); encErr == nil {
-				accountCopy.IMAPConfig.Password = encrypted
+				// Create a separate copy for storage to avoid modifying the returned accountCopy
+				accountForStorage := *account
+				accountForStorage.IMAPConfig.Password = encrypted
+
 				// Update store with encrypted password
-				if err := s.store.Update(ctx, &accountCopy); err != nil {
-					log.Printf("Warning: failed to re-encrypt IMAP password: %v", err)
+				if err := s.store.Update(ctx, &accountForStorage); err != nil {
+					log.Printf("Warning: failed to re-encrypt IMAP password (store update failed): %v", err)
 				} else {
-					log.Printf("IMAP password re-encrypted and stored for %s", accountID)
+					log.Printf("IMAP password re-encrypted and stored for %s (encrypted length: %d)", accountID, len(encrypted))
 				}
+			} else {
+				log.Printf("Warning: failed to encrypt IMAP password: %v", encErr)
 			}
 		}
 		accountCopy.IMAPConfig.Password = password
@@ -327,13 +332,18 @@ func (s *AccountService) GetAccountWithCredentials(ctx context.Context, accountI
 
 			// Re-encrypt the password for future use
 			if encrypted, encErr := s.encryptor.Encrypt(password); encErr == nil {
-				accountCopy.SMTPConfig.Password = encrypted
+				// Create a separate copy for storage to avoid modifying the returned accountCopy
+				accountForStorage := *account
+				accountForStorage.SMTPConfig.Password = encrypted
+
 				// Update store with encrypted password
-				if err := s.store.Update(ctx, &accountCopy); err != nil {
-					log.Printf("Warning: failed to re-encrypt SMTP password: %v", err)
+				if err := s.store.Update(ctx, &accountForStorage); err != nil {
+					log.Printf("Warning: failed to re-encrypt SMTP password (store update failed): %v", err)
 				} else {
-					log.Printf("SMTP password re-encrypted and stored for %s", accountID)
+					log.Printf("SMTP password re-encrypted and stored for %s (encrypted length: %d)", accountID, len(encrypted))
 				}
+			} else {
+				log.Printf("Warning: failed to encrypt SMTP password: %v", encErr)
 			}
 		}
 		accountCopy.SMTPConfig.Password = password

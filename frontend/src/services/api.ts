@@ -212,12 +212,54 @@ export async function updateSyncSettings(
   return handleResponse<Account>(response);
 }
 
-export async function getAccountFolders(accountId: string): Promise<import('@/types').FolderSyncInfo[]> {
+export async function getAccountFolders(accountId: string): Promise<{ folders: any[]; total: number }> {
   const response = await fetch(`${getApiBaseUrl()}/v1/accounts/${accountId}/folders`);
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.error || 'Failed to load folders');
   }
-  const data = await response.json();
-  return data.folders;
+  return response.json();
+}
+
+export async function getLiveFolders(accountId: string): Promise<{ folders: any[]; total: number }> {
+  const response = await fetch(`${getApiBaseUrl()}/v1/accounts/${accountId}/folders/live`);
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to load folders');
+  }
+  return response.json();
+}
+
+export async function markMessageRead(
+  accountId: string,
+  uid: string,
+  folder?: string
+): Promise<void> {
+  const params = new URLSearchParams();
+  if (folder) params.set('folder', folder);
+
+  const response = await fetch(
+    `${getApiBaseUrl()}/v1/accounts/${accountId}/messages/${uid}/mark-read?${params}`,
+    { method: 'POST' }
+  );
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error?.message || 'Failed to mark message as read');
+  }
+}
+
+export async function markMessagesRead(
+  accountId: string,
+  uids: string[],
+  folder?: string
+): Promise<void> {
+  const response = await fetch(`${getApiBaseUrl()}/v1/accounts/${accountId}/messages/mark-read`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uids, folder: folder || 'INBOX' }),
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error?.message || 'Failed to mark messages as read');
+  }
 }

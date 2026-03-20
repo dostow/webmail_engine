@@ -95,6 +95,9 @@ func (h *APIHandler) RegisterRoutes(router *gin.Engine) {
 		accountRoutes.GET("/search", h.searchMessages)
 		accountRoutes.POST("/search", h.searchMessages)
 		accountRoutes.POST("/send", h.sendMessage)
+		accountRoutes.POST("/messages/:uid/mark-read", h.markMessageRead)
+		accountRoutes.POST("/messages/mark-read", h.markMessagesRead)
+		accountRoutes.GET("/folders/live", h.listFolders)
 	}
 
 	// Processor routes
@@ -598,6 +601,99 @@ func (h *APIHandler) getAccountFolders(c *gin.Context) {
 		"account_id": accountID,
 		"folders":    folders,
 		"total":      len(folders),
+	})
+}
+
+// listFolders returns live folder list from IMAP server
+func (h *APIHandler) listFolders(c *gin.Context) {
+	accountID := c.Param("id")
+	if accountID == "" {
+		respondError(c, models.NewValidationError("account_id", "Account ID is required"))
+		return
+	}
+
+	folders, err := h.messageService.ListFolders(c.Request.Context(), accountID)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"account_id": accountID,
+		"folders":    folders,
+		"total":      len(folders),
+	})
+}
+
+// markMessageRead marks a single message as read
+func (h *APIHandler) markMessageRead(c *gin.Context) {
+	accountID := c.Param("id")
+	messageUID := c.Param("uid")
+	folder := c.Query("folder")
+
+	if accountID == "" {
+		respondError(c, models.NewValidationError("account_id", "Account ID is required"))
+		return
+	}
+	if messageUID == "" {
+		respondError(c, models.NewValidationError("uid", "Message UID is required"))
+		return
+	}
+
+	if folder == "" {
+		folder = "INBOX"
+	}
+
+	err := h.messageService.MarkMessagesRead(c.Request.Context(), accountID, []string{messageUID}, folder)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "ok",
+		"message": "Message marked as read",
+	})
+}
+
+// markMessagesRead marks multiple messages as read
+func (h *APIHandler) markMessagesRead(c *gin.Context) {
+	accountID := c.Param("id")
+	if accountID == "" {
+		respondError(c, models.NewValidationError("account_id", "Account ID is required"))
+		return
+	}
+
+	var req struct {
+		UIDs   []string `json:"uids"`
+		Folder string   `json:"folder"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondError(c, models.NewValidationError("body", "Invalid request body"))
+		return
+	}
+
+	if len(req.UIDs) == 0 {
+		respondError(c, models.NewValidationError("uids", "At least one message UID is required"))
+		return
+	}
+
+	folder := req.Folder
+	if folder == "" {
+		folder = "INBOX"
+	}
+
+	err := h.messageService.MarkMessagesRead(c.Request.Context(), accountID, req.UIDs, folder)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "ok",
+		"message": "Messages marked as read",
+		"count":   len(req.UIDs),
 	})
 }
 

@@ -49,7 +49,7 @@ export function AccountDetailView() {
           setError(err instanceof Error ? err.message : 'Failed to load account');
           return null;
         }),
-        api.getAccountFolders(accountId).catch(() => []),
+        api.getAccountFolders(accountId).then((data) => data.folders || []).catch(() => []),
       ]);
 
       if (accountData) {
@@ -70,7 +70,7 @@ export function AccountDetailView() {
       setLoading(true);
       const [accountData, folderData] = await Promise.all([
         api.getAccount(accountId),
-        api.getAccountFolders(accountId),
+        api.getAccountFolders(accountId).then((data) => data.folders || []),
       ]);
       setAccount(accountData);
       setFolders(folderData);

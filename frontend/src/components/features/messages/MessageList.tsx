@@ -79,7 +79,7 @@ export function MessageList({
       {/* Account selector + actions */}
       <div className="shrink-0 flex items-center justify-between gap-3 px-3 py-2.5 border-b bg-muted/20">
         <Select value={selectedAccountId || ''} onValueChange={onAccountChange}>
-          <SelectTrigger className="h-8 text-sm flex-1 max-w-[260px]">
+          <SelectTrigger className="h-8 text-sm flex-1 max-w-65">
             <SelectValue placeholder="Select account…" />
           </SelectTrigger>
           <SelectContent>
@@ -204,8 +204,8 @@ export function MessageList({
                       isSelected
                         ? 'bg-primary/10 hover:bg-primary/15'
                         : unread
-                        ? 'bg-accent/30 hover:bg-accent/50 font-medium'
-                        : 'hover:bg-muted/40'
+                          ? 'bg-accent/30 hover:bg-accent/50 font-medium'
+                          : 'hover:bg-muted/40'
                     )}
                     onClick={() => handleRowClick(message)}
                   >
@@ -231,11 +231,6 @@ export function MessageList({
                         <span className={cn("truncate text-xs", unread && "font-semibold")}>
                           {message.subject || '(No subject)'}
                         </span>
-                        {message.preview && (
-                          <span className="text-[11px] text-muted-foreground truncate">
-                            {message.preview}
-                          </span>
-                        )}
                       </div>
                     </TableCell>
                     <TableCell className="py-2 text-right text-[10px] text-muted-foreground whitespace-nowrap">

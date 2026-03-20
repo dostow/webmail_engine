@@ -230,6 +230,15 @@ export async function getLiveFolders(accountId: string): Promise<{ folders: any[
   return response.json();
 }
 
+export async function getFolderTree(accountId: string): Promise<{ folders: any[]; total: number }> {
+  const response = await fetch(`${getApiBaseUrl()}/v1/accounts/${accountId}/folders/tree`);
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to load folder tree');
+  }
+  return response.json();
+}
+
 export async function markMessageRead(
   accountId: string,
   uid: string,

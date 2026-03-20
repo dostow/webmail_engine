@@ -1,10 +1,12 @@
 import { useNavigate, useLoaderData, useNavigation, useSearchParams } from 'react-router-dom';
+import React from 'react';
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from '@/components/ui/resizable';
 import { useTriageStore } from './messages/useTriageStore';
+import { useMessageList } from './messages/useMessageList';
 import { MessageList } from './messages/MessageList';
 import { MessageDetailPane } from './messages/MessageDetailPane';
 import { ComposePane } from './messages/ComposePane';
@@ -22,8 +24,9 @@ const MESSAGES_PER_PAGE = 50;
 
 export function MessagesView() {
   const navigate = useNavigate();
-  const { accounts, messages, total, selectedAccountId: loaderAccountId } = useLoaderData() as LoaderData;
+  const { accounts, messages: loaderMessages, total: loaderTotal, selectedAccountId: loaderAccountId } = useLoaderData() as LoaderData;
   const navigation = useNavigation();
+  const messageListStore = useMessageList();
 
   const loading = navigation.state === 'loading';
 
@@ -34,8 +37,22 @@ export function MessagesView() {
   // Effective account ID: prefer triage store value (user interacted), fallback to URL/loader
   const effectiveAccountId = selectedAccountId || loaderAccountId;
 
+  // Sync folder with message list store on mount
+  React.useEffect(() => {
+    if (selectedFolder && messageListStore.folder !== selectedFolder) {
+      messageListStore.setFolder(selectedFolder);
+    }
+  }, [selectedFolder]);
+
+  // Sync account with message list store
+  React.useEffect(() => {
+    if (effectiveAccountId && messageListStore.accountId !== effectiveAccountId) {
+      messageListStore.setAccount(effectiveAccountId);
+    }
+  }, [effectiveAccountId]);
+
   const page = parseInt(searchParams.get('page') || '1', 10);
-  const totalPages = Math.max(1, Math.ceil(total / MESSAGES_PER_PAGE));
+  const totalPages = Math.max(1, Math.ceil((messageListStore.total || loaderTotal) / MESSAGES_PER_PAGE));
 
   const handleAccountChange = (accountId: string) => {
     setAccount(accountId);
@@ -51,17 +68,24 @@ export function MessagesView() {
   };
 
   const handleFolderChange = (folder: string) => {
+    // Update message list store (which will fetch new messages)
+    messageListStore.setFolder(folder);
+    // Update URL params
     const params = new URLSearchParams(searchParams);
     if (effectiveAccountId) params.set('accountId', effectiveAccountId);
     params.set('folder', folder);
+    params.set('page', '1'); // Reset to first page when changing folders
     setSearchParams(params);
   };
 
   const handleRefresh = () => {
-    const params = new URLSearchParams(searchParams);
-    if (effectiveAccountId) params.set('accountId', effectiveAccountId);
-    navigate(`/messages?${params.toString()}`);
+    messageListStore.refresh();
   };
+
+  // Use messages from message list store when available, otherwise use loader data
+  const displayMessages = messageListStore.accountId ? messageListStore.messages : loaderMessages;
+  const displayTotal = messageListStore.accountId ? messageListStore.total : loaderTotal;
+  const displayLoading = messageListStore.accountId ? messageListStore.loading : loading;
 
   return (
     <div className="w-full h-full flex flex-col min-h-0">
@@ -102,11 +126,12 @@ export function MessagesView() {
         >
           <MessageList
             accounts={accounts}
-            messages={messages}
-            total={total}
+            messages={displayMessages}
+            total={displayTotal}
             page={page}
             totalPages={totalPages}
-            loading={loading}
+            loading={displayLoading}
+            folder={selectedFolder}
             onAccountChange={handleAccountChange}
             onPageChange={handlePageChange}
             onRefresh={handleRefresh}
@@ -116,7 +141,7 @@ export function MessagesView() {
         {/* Right: Detail or Compose pane (always rendered, content toggled) */}
         <ResizablePanel
           id="detail-pane"
-          defaultSize={"45%"}
+          defaultSize={"50%"}
           minSize={"30%"}
         >
           <div className="h-full px-2 min-h-0">

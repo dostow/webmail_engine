@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useTriageStore } from './useTriageStore';
+import { useMessageList } from './useMessageList';
 import { useEmailToast } from '@/hooks/useToast';
 import { formatFullDate } from '@/utils/format';
 import * as api from '@/services/api';
@@ -157,6 +158,9 @@ export function MessageDetailPane({ accountId, messageUid }: MessageDetailPanePr
   const [headersOpen, setHeadersOpen] = useState(false);
   const [markedAsRead, setMarkedAsRead] = useState(false);
 
+  // Get folder from message list store
+  const { folder } = useMessageList();
+
   // Pull the list-row data from the store for instant header rendering
   const { selectedMessage: initialMessage, openCompose, clearAll } = useTriageStore();
   const { showError, showSuccess } = useEmailToast();
@@ -165,7 +169,7 @@ export function MessageDetailPane({ accountId, messageUid }: MessageDetailPanePr
     setBodyLoading(true);
     setError(null);
     try {
-      const data = await api.getMessage(accountId, messageUid, 'INBOX');
+      const data = await api.getMessage(accountId, messageUid, folder);
       setDetail(data);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to load message';
@@ -174,7 +178,7 @@ export function MessageDetailPane({ accountId, messageUid }: MessageDetailPanePr
     } finally {
       setBodyLoading(false);
     }
-  }, [accountId, messageUid, showError]);
+  }, [accountId, messageUid, folder, showError]);
 
   useEffect(() => {
     // Reset previous detail when switching messages
@@ -190,13 +194,13 @@ export function MessageDetailPane({ accountId, messageUid }: MessageDetailPanePr
     if (detail && !markedAsRead) {
       const isUnread = detail.flags && !detail.flags.includes('\\Seen');
       if (isUnread) {
-        api.markMessageRead(accountId, messageUid, 'INBOX').catch(() => {
+        api.markMessageRead(accountId, messageUid, folder).catch(() => {
           // Silently fail - marking as read is not critical
         });
         setMarkedAsRead(true);
       }
     }
-  }, [detail, accountId, messageUid, markedAsRead]);
+  }, [detail, accountId, messageUid, folder, markedAsRead]);
 
   // --- Header data: use detail if loaded, else fall back to the list-row snapshot ---
   const headerFrom = detail?.from ?? initialMessage?.from;
@@ -262,7 +266,7 @@ export function MessageDetailPane({ accountId, messageUid }: MessageDetailPanePr
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <Badge variant="secondary" className="text-xs">INBOX</Badge>
+            <Badge variant="secondary" className="text-xs">{folder || 'INBOX'}</Badge>
             <span className="text-xs text-muted-foreground whitespace-nowrap">
               {headerDate ? formatFullDate(headerDate) : '—'}
             </span>

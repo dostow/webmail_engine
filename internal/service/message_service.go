@@ -1565,6 +1565,128 @@ func (s *MessageService) ListFolders(
 	return folders, nil
 }
 
+// BuildFolderTree builds a hierarchical tree structure from flat folder list
+func BuildFolderTree(folders []*models.FolderInfo) []*models.FolderTreeNode {
+	if len(folders) == 0 {
+		return nil
+	}
+
+	// Create a map for quick lookup
+	folderMap := make(map[string]*models.FolderTreeNode)
+	for _, f := range folders {
+		folderMap[f.Name] = &models.FolderTreeNode{
+			Folder:   f,
+			Children: []*models.FolderTreeNode{},
+			Path:     f.Name,
+			Depth:    0,
+		}
+	}
+
+	var rootFolders []*models.FolderTreeNode
+
+	// Determine delimiter (use most common one from folders)
+	delimiter := "/"
+	for _, f := range folders {
+		if f.Delimiter != "" && f.Delimiter != " " {
+			delimiter = f.Delimiter
+			break
+		}
+	}
+
+	// Build tree structure
+	for _, folder := range folders {
+		node, exists := folderMap[folder.Name]
+		if !exists {
+			continue
+		}
+
+		// Set initial path to folder name
+		node.Path = folder.Name
+
+		// Check if this folder has a parent
+		parts := strings.Split(folder.Name, delimiter)
+		if len(parts) > 1 {
+			// Try to find parent folder
+			parentName := strings.Join(parts[:len(parts)-1], delimiter)
+			if parent, exists := folderMap[parentName]; exists {
+				// Add as child of parent
+				node.Depth = parent.Depth + 1
+				parent.Children = append(parent.Children, node)
+				continue
+			}
+		}
+
+		// No parent found, this is a root-level folder
+		rootFolders = append(rootFolders, node)
+	}
+
+	// Sort root folders
+	sortFolderTree(rootFolders)
+
+	return rootFolders
+}
+
+// sortFolderTree sorts folder tree nodes alphabetically, with standard folders first
+func sortFolderTree(nodes []*models.FolderTreeNode) {
+	sort.Slice(nodes, func(i, j int) bool {
+		iName := strings.ToUpper(nodes[i].Folder.Name)
+		jName := strings.ToUpper(nodes[j].Folder.Name)
+
+		// Standard folders order
+		standardOrder := []string{"INBOX", "DRAFTS", "SENT", "TRASH", "JUNK", "ARCHIVE"}
+
+		iIsStandard := false
+		jIsStandard := false
+		iIndex := -1
+		jIndex := -1
+
+		for idx, sf := range standardOrder {
+			if iName == sf {
+				iIsStandard = true
+				iIndex = idx
+			}
+			if jName == sf {
+				jIsStandard = true
+				jIndex = idx
+			}
+		}
+
+		// Standard folders come first
+		if iIsStandard && !jIsStandard {
+			return true
+		}
+		if !iIsStandard && jIsStandard {
+			return false
+		}
+
+		// Sort standard folders by predefined order
+		if iIsStandard && jIsStandard {
+			return iIndex < jIndex
+		}
+
+		// Sort non-standard folders alphabetically
+		return iName < jName
+	})
+
+	// Recursively sort children
+	for _, node := range nodes {
+		sortFolderTree(node.Children)
+	}
+}
+
+// GetFolderTree returns folder hierarchy for an account
+func (s *MessageService) GetFolderTree(
+	ctx context.Context,
+	accountID string,
+) ([]*models.FolderTreeNode, error) {
+	folders, err := s.ListFolders(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	return BuildFolderTree(folders), nil
+}
+
 // GetFolderInfo gets information about a specific folder
 func (s *MessageService) GetFolderInfo(
 	ctx context.Context,

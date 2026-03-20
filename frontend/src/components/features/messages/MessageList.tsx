@@ -30,6 +30,7 @@ interface MessageListProps {
   page: number;
   totalPages: number;
   loading: boolean;
+  folder?: string;
   onAccountChange: (accountId: string) => void;
   onPageChange: (page: number) => void;
   onRefresh: () => void;
@@ -58,6 +59,7 @@ export function MessageList({
   page,
   totalPages,
   loading,
+  folder,
   onAccountChange,
   onPageChange,
   onRefresh,
@@ -78,16 +80,23 @@ export function MessageList({
     <div className="h-full flex flex-col min-h-0">
       {/* Account selector + actions */}
       <div className="shrink-0 flex items-center justify-between gap-3 px-3 py-2.5 border-b bg-muted/20">
-        <Select value={selectedAccountId || ''} onValueChange={onAccountChange}>
-          <SelectTrigger className="h-8 text-sm flex-1 max-w-65">
-            <SelectValue placeholder="Select account…" />
-          </SelectTrigger>
-          <SelectContent>
-            {accounts.map((a) => (
-              <SelectItem key={a.id} value={a.id}>{a.email}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-3 flex-1">
+          <Select value={selectedAccountId || ''} onValueChange={onAccountChange}>
+            <SelectTrigger className="h-8 text-sm flex-1 max-w-65">
+              <SelectValue placeholder="Select account…" />
+            </SelectTrigger>
+            <SelectContent>
+              {accounts.map((a) => (
+                <SelectItem key={a.id} value={a.id}>{a.email}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {folder && (
+            <span className="text-xs text-muted-foreground font-medium">
+              📁 {folder}
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-1">
           <Button
             variant="ghost"

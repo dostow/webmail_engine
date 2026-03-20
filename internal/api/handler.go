@@ -98,6 +98,7 @@ func (h *APIHandler) RegisterRoutes(router *gin.Engine) {
 		accountRoutes.POST("/messages/:uid/mark-read", h.markMessageRead)
 		accountRoutes.POST("/messages/mark-read", h.markMessagesRead)
 		accountRoutes.GET("/folders/live", h.listFolders)
+		accountRoutes.GET("/folders/tree", h.getFolderTree)
 	}
 
 	// Processor routes
@@ -622,6 +623,27 @@ func (h *APIHandler) listFolders(c *gin.Context) {
 		"account_id": accountID,
 		"folders":    folders,
 		"total":      len(folders),
+	})
+}
+
+// getFolderTree returns folder hierarchy tree for an account
+func (h *APIHandler) getFolderTree(c *gin.Context) {
+	accountID := c.Param("id")
+	if accountID == "" {
+		respondError(c, models.NewValidationError("account_id", "Account ID is required"))
+		return
+	}
+
+	tree, err := h.messageService.GetFolderTree(c.Request.Context(), accountID)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"account_id": accountID,
+		"folders":    tree,
+		"total":      len(tree),
 	})
 }
 

@@ -1,17 +1,16 @@
 import { cn } from '@/lib/utils';
-import { useFolders, type FolderInfo } from '@/hooks/useFolders';
+import { useFolders, type FolderInfo, type FolderTreeNode } from '@/hooks/useFolders';
 import { useTriageStore } from './useTriageStore';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useState } from 'react';
 
 interface FolderPaneProps {
   accountId: string;
   selectedFolder: string;
   onSelectFolder: (folder: string) => void;
 }
-
-const STANDARD_FOLDERS = ['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk'];
 
 function getFolderIcon(folderName: string) {
   const name = folderName.toUpperCase();
@@ -63,7 +62,11 @@ function getFolderIcon(folderName: string) {
 }
 
 function getFolderDisplayName(folderName: string): string {
-  const name = folderName.toUpperCase();
+  // Always strip the full parent path and show only the last segment
+  const parts = folderName.split('.');
+  const displayName = parts[parts.length - 1];
+
+  const name = displayName.toUpperCase();
   switch (name) {
     case 'INBOX':
       return 'Inbox';
@@ -79,7 +82,7 @@ function getFolderDisplayName(folderName: string): string {
     case 'ARCHIVE':
       return 'Archive';
     default:
-      return folderName;
+      return displayName;
   }
 }
 
@@ -87,67 +90,145 @@ function FolderItem({
   folder,
   isSelected,
   onClick,
+  depth = 0,
+  hasChildren = false,
+  isExpanded = false,
+  onToggleExpand,
 }: {
   folder: FolderInfo;
   isSelected: boolean;
   onClick: () => void;
+  depth?: number;
+  hasChildren?: boolean;
+  isExpanded?: boolean;
+  onToggleExpand?: (e: React.MouseEvent) => void;
 }) {
   const hasUnseen = folder.unseen > 0;
 
   return (
-    <button
-      onClick={onClick}
-      className={cn(
-        'w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors',
-        isSelected
-          ? 'bg-primary text-primary-foreground'
-          : 'hover:bg-muted text-muted-foreground hover:text-foreground'
-      )}
+    <div
+      className="w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-colors hover:bg-muted"
+      style={{ paddingLeft: `${12 + (depth * 16)}px` }}
     >
-      <span className={cn(isSelected ? 'text-primary-foreground' : 'text-muted-foreground')}>
-        {getFolderIcon(folder.name)}
-      </span>
-      <span className="flex-1 text-left truncate">
-        {getFolderDisplayName(folder.name)}
-      </span>
-      {hasUnseen && (
-        <span
-          className={cn(
-            'text-xs font-medium px-1.5 py-0.5 rounded-full min-w-[1.25rem] text-center',
-            isSelected
-              ? 'bg-primary-foreground text-primary'
-              : 'bg-primary text-primary-foreground'
-          )}
+      {/* Expand/collapse chevron for folders with children */}
+      {hasChildren ? (
+        <button
+          onClick={onToggleExpand}
+          className="p-0.5 hover:bg-muted-foreground/20 rounded"
         >
-          {folder.unseen}
-        </span>
+          <svg
+            className={`h-3 w-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
+      ) : (
+        <div className="w-4" />
       )}
-    </button>
+
+      <button
+        onClick={onClick}
+        className={cn(
+          'flex-1 flex items-center gap-2 rounded-md transition-colors',
+          isSelected
+            ? 'bg-primary text-primary-foreground'
+            : 'text-muted-foreground hover:text-foreground'
+        )}
+      >
+        <span className={cn(isSelected ? 'text-primary-foreground' : 'text-muted-foreground')}>
+          {getFolderIcon(folder.name)}
+        </span>
+        <span className="flex-1 text-left truncate">
+          {getFolderDisplayName(folder.name)}
+        </span>
+        {hasUnseen && (
+          <span
+            className={cn(
+              'text-xs font-medium px-1.5 py-0.5 rounded-full min-w-[1.25rem] text-center',
+              isSelected
+                ? 'bg-primary-foreground text-primary'
+                : 'bg-primary text-primary-foreground'
+            )}
+          >
+            {folder.unseen}
+          </span>
+        )}
+      </button>
+    </div>
+  );
+}
+
+function FolderTreeNodeItem({
+  node,
+  selectedFolder,
+  onSelectFolder,
+  expandedFolders,
+  onToggleExpand,
+}: {
+  node: FolderTreeNode;
+  selectedFolder: string;
+  onSelectFolder: (folder: string) => void;
+  expandedFolders: Set<string>;
+  onToggleExpand: (path: string) => void;
+}) {
+  const isExpanded = expandedFolders.has(node.path);
+  const hasChildren = node.children && node.children.length > 0;
+
+  return (
+    <div>
+      <FolderItem
+        folder={node.folder}
+        isSelected={selectedFolder === node.folder.name}
+        onClick={() => onSelectFolder(node.folder.name)}
+        depth={node.depth}
+        hasChildren={hasChildren}
+        isExpanded={isExpanded}
+        onToggleExpand={(e) => {
+          e.stopPropagation();
+          onToggleExpand(node.path);
+        }}
+      />
+      {hasChildren && isExpanded && (
+        <div>
+          {node.children.map((child) => (
+            <FolderTreeNodeItem
+              key={child.path}
+              node={child}
+              selectedFolder={selectedFolder}
+              onSelectFolder={onSelectFolder}
+              expandedFolders={expandedFolders}
+              onToggleExpand={onToggleExpand}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
 export function FolderPane({ accountId, selectedFolder, onSelectFolder }: FolderPaneProps) {
-  const { folders, loading, error } = useFolders(accountId);
+  const { folderTree, loading, error } = useFolders(accountId, true);
   const { setAccount } = useTriageStore();
-
-  // Separate standard folders from custom folders
-  const standardFolders = folders.filter((f) =>
-    STANDARD_FOLDERS.some((sf) => f.name.toUpperCase() === sf.toUpperCase())
-  );
-  const customFolders = folders.filter(
-    (f) => !STANDARD_FOLDERS.some((sf) => f.name.toUpperCase() === sf.toUpperCase())
-  );
-
-  // Sort standard folders in expected order
-  const sortedStandardFolders = standardFolders.sort((a, b) => {
-    const aIndex = STANDARD_FOLDERS.findIndex((sf) => sf.toUpperCase() === a.name.toUpperCase());
-    const bIndex = STANDARD_FOLDERS.findIndex((sf) => sf.toUpperCase() === b.name.toUpperCase());
-    return (aIndex === -1 ? 999 : aIndex) - (bIndex === -1 ? 999 : bIndex);
-  });
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['INBOX']));
 
   const handleFolderClick = (folderName: string) => {
     setAccount(accountId);
     onSelectFolder(folderName);
+  };
+
+  const toggleExpand = (path: string) => {
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
   };
 
   if (loading) {
@@ -171,7 +252,7 @@ export function FolderPane({ accountId, selectedFolder, onSelectFolder }: Folder
     );
   }
 
-  if (folders.length === 0) {
+  if (folderTree.length === 0) {
     return (
       <div className="p-4 text-sm text-muted-foreground text-center">
         <p>No folders found</p>
@@ -181,42 +262,21 @@ export function FolderPane({ accountId, selectedFolder, onSelectFolder }: Folder
 
   return (
     <div className="h-full flex flex-col">
-      {/* Standard folders */}
-      {sortedStandardFolders.length > 0 && (
-        <div className="p-2">
-          <div className="space-y-0.5">
-            {sortedStandardFolders.map((folder) => (
-              <FolderItem
-                key={folder.name}
-                folder={folder}
-                isSelected={selectedFolder === folder.name}
-                onClick={() => handleFolderClick(folder.name)}
-              />
-            ))}
-          </div>
+      {/* Folder tree */}
+      <ScrollArea className="flex-1">
+        <div className="p-2 space-y-0.5">
+          {folderTree.map((node) => (
+            <FolderTreeNodeItem
+              key={node.path}
+              node={node}
+              selectedFolder={selectedFolder}
+              onSelectFolder={handleFolderClick}
+              expandedFolders={expandedFolders}
+              onToggleExpand={toggleExpand}
+            />
+          ))}
         </div>
-      )}
-
-      {/* Custom folders */}
-      {customFolders.length > 0 && (
-        <>
-          <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground border-t mt-2">
-            Folders
-          </div>
-          <ScrollArea className="flex-1">
-            <div className="p-2 pt-0 space-y-0.5">
-              {customFolders.map((folder) => (
-                <FolderItem
-                  key={folder.name}
-                  folder={folder}
-                  isSelected={selectedFolder === folder.name}
-                  onClick={() => handleFolderClick(folder.name)}
-                />
-              ))}
-            </div>
-          </ScrollArea>
-        </>
-      )}
+      </ScrollArea>
 
       {/* Refresh button */}
       <div className="p-2 border-t mt-auto">

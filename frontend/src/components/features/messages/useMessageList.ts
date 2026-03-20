@@ -22,6 +22,7 @@ export interface MessageListState {
 
   // Actions
   setAccount: (accountId: string) => void;
+  setFolder: (folder: string) => void;
   setPage: (page: number) => Promise<void>;
   nextPage: () => Promise<void>;
   previousPage: () => Promise<void>;
@@ -78,6 +79,11 @@ export const useMessageList = create<MessageListState>((set, get) => ({
 
   setAccount: async (accountId) => {
     set({ accountId, loading: true, error: null, currentPage: 1, lastUid: undefined });
+    await get().refresh();
+  },
+
+  setFolder: async (folder) => {
+    set({ folder, loading: true, error: null, currentPage: 1, lastUid: undefined });
     await get().refresh();
   },
 

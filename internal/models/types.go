@@ -404,6 +404,14 @@ type FolderInfo struct {
 	LastSync    time.Time `json:"last_sync"`
 }
 
+// FolderTreeNode represents a node in the folder hierarchy
+type FolderTreeNode struct {
+	Folder   *FolderInfo       `json:"folder"`
+	Children []*FolderTreeNode `json:"children,omitempty"`
+	Path     string            `json:"path"`
+	Depth    int               `json:"depth"`
+}
+
 // SearchQuery represents search criteria for messages
 type SearchQuery struct {
 	AccountID       string        `json:"account_id"`

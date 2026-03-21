@@ -167,15 +167,15 @@ export function MessageList({
         </div>
       )}
 
-      {/* Message table */}
-      {loading ? (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-          Loading…
-        </div>
-      ) : !selectedAccountId ? (
+      {/* Message table/states */}
+      {!selectedAccountId ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-muted-foreground">
           <div className="text-4xl">📬</div>
           <p className="text-sm">Select an account to view messages</p>
+        </div>
+      ) : loading && messages.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+          Loading…
         </div>
       ) : filteredMessages.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-muted-foreground">
@@ -247,13 +247,13 @@ export function MessageList({
                         <span className={cn("truncate text-xs", unread && "font-semibold")}>
                           {message.subject || '(No subject)'}
                         </span>
-                        {message.attachments && message.attachments.length > 0 && (
+                        {message.has_attachments && (
                           <div className="flex items-center gap-1 mt-0.5">
                             <svg className="h-3 w-3 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                             </svg>
                             <span className="text-[10px] text-muted-foreground">
-                              {message.attachments.length} attachment{message.attachments.length > 1 ? 's' : ''}
+                              Has attachments
                             </span>
                           </div>
                         )}

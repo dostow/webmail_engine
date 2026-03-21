@@ -312,6 +312,12 @@ func (s *AccountService) GetAccountWithCredentials(ctx context.Context, accountI
 				if err := s.store.Update(ctx, &accountForStorage); err != nil {
 					log.Printf("Warning: failed to re-encrypt IMAP password (store update failed): %v", err)
 				} else {
+					// Verify the update worked by re-reading from store
+					if verify, verifyErr := s.store.GetByID(ctx, accountID); verifyErr == nil {
+						log.Printf("[DEBUG] IMAP password verification: stored length=%d, first 20 chars=%q", len(verify.IMAPConfig.Password), truncateString(verify.IMAPConfig.Password, 20))
+					} else {
+						log.Printf("Warning: failed to verify IMAP password update: %v", verifyErr)
+					}
 					log.Printf("IMAP password re-encrypted and stored for %s (encrypted length: %d)", accountID, len(encrypted))
 				}
 			} else {
@@ -340,6 +346,12 @@ func (s *AccountService) GetAccountWithCredentials(ctx context.Context, accountI
 				if err := s.store.Update(ctx, &accountForStorage); err != nil {
 					log.Printf("Warning: failed to re-encrypt SMTP password (store update failed): %v", err)
 				} else {
+					// Verify the update worked by re-reading from store
+					if verify, verifyErr := s.store.GetByID(ctx, accountID); verifyErr == nil {
+						log.Printf("[DEBUG] SMTP password verification: stored length=%d, first 20 chars=%q", len(verify.SMTPConfig.Password), truncateString(verify.SMTPConfig.Password, 20))
+					} else {
+						log.Printf("Warning: failed to verify SMTP password update: %v", verifyErr)
+					}
 					log.Printf("SMTP password re-encrypted and stored for %s (encrypted length: %d)", accountID, len(encrypted))
 				}
 			} else {
@@ -899,4 +911,12 @@ func (s *AccountService) DeleteFolderSyncState(ctx context.Context, accountID, f
 // ListFolderSyncStates lists all folder sync states for an account
 func (s *AccountService) ListFolderSyncStates(ctx context.Context, accountID string) ([]*models.FolderSyncState, error) {
 	return s.store.ListFolderSyncStates(ctx, accountID)
+}
+
+// truncateString returns the first n characters of s, or s if it's shorter
+func truncateString(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }

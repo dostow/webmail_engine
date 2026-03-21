@@ -680,6 +680,8 @@ func (s *MessageService) GetMessage(
 	for i := range parseResult.Attachments {
 		att := &parseResult.Attachments[i]
 		if att.Data != nil {
+			oldID := att.ID
+
 			id, err := s.storage.Store(accountID, folder, uid, att.Filename, att.Data)
 			if err != nil {
 				log.Printf("Warning: failed to store attachment %s: %v", att.Filename, err)
@@ -690,7 +692,7 @@ func (s *MessageService) GetMessage(
 			// Update corresponding message attachment
 			for j := range parseResult.Message.Attachments {
 				msgAtt := &parseResult.Message.Attachments[j]
-				if msgAtt.ID == id || msgAtt.Filename == att.Filename {
+				if msgAtt.ID == oldID || msgAtt.Filename == att.Filename {
 					msgAtt.ID = id
 					break
 				}

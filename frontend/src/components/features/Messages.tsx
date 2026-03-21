@@ -1,4 +1,4 @@
-import { useNavigate, useLoaderData, useNavigation, useSearchParams } from 'react-router-dom';
+import { useNavigate, useLoaderData, useNavigation, useSearchParams, useRevalidator } from 'react-router-dom';
 import React from 'react';
 import {
   ResizableHandle,
@@ -24,6 +24,7 @@ const MESSAGES_PER_PAGE = 50;
 
 export function MessagesView() {
   const navigate = useNavigate();
+  const revalidator = useRevalidator();
   const { accounts, messages: loaderMessages, total: loaderTotal, selectedAccountId: loaderAccountId } = useLoaderData() as LoaderData;
   const navigation = useNavigation();
   const messageListStore = useMessageList();
@@ -87,14 +88,19 @@ export function MessagesView() {
 
   const handleRefresh = () => {
     messageListStore.refresh();
+    // revalidator.revalidate();
   };
 
   // Use messages from message list store when it's synced with the current view,
   // otherwise fallback to loader data (primarily for the initial load).
-  const isStoreSynced = messageListStore.accountId === effectiveAccountId && messageListStore.folder === selectedFolder;
+  // We check account, folder, and page to ensure the store data matches what the user expects.
+  const isStoreSynced = messageListStore.accountId === effectiveAccountId &&
+    messageListStore.folder === selectedFolder &&
+    messageListStore.currentPage === page;
+
   const displayMessages = isStoreSynced ? messageListStore.messages : loaderMessages;
   const displayTotal = isStoreSynced ? messageListStore.total : loaderTotal;
-  const displayLoading = isStoreSynced ? messageListStore.loading : loading;
+  const displayLoading = isStoreSynced ? messageListStore.loading : (loading || revalidator.state === 'loading');
 
   return (
     <div className="w-full h-full flex flex-col min-h-0">

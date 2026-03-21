@@ -69,7 +69,8 @@ func NewFileAttachmentStorage(basePath string) AttachmentStorage {
 // Directory structure: basePath/accountID/folder/messageUID/attachmentID
 func (s *FileAttachmentStorage) Store(accountID, folder, messageUID, filename string, data []byte) (string, error) {
 	// Generate attachment ID from filename + content (first 16 chars of SHA256)
-	hashInput := fmt.Sprintf("%s:%s:%s:%s", accountID, folder, messageUID, filename)
+	contentHash := sha256.Sum256(data)
+	hashInput := fmt.Sprintf("%s:%s:%s:%s:%x", accountID, folder, messageUID, filename, contentHash)
 	id := fmt.Sprintf("%x", sha256.Sum256([]byte(hashInput)))[:16]
 
 	// Create directory structure: accountID/folder/messageUID

@@ -158,8 +158,8 @@ export function MessageDetailPane({ accountId, messageUid }: MessageDetailPanePr
   const [headersOpen, setHeadersOpen] = useState(false);
   const [markedAsRead, setMarkedAsRead] = useState(false);
 
-  // Get folder from message list store
-  const { folder } = useMessageList();
+  // Get folder and pagination info from message list store
+  const { folder, currentCursor, pageSize } = useMessageList();
 
   // Pull the list-row data from the store for instant header rendering
   const { selectedMessage: initialMessage, openCompose, clearAll } = useTriageStore();
@@ -194,7 +194,14 @@ export function MessageDetailPane({ accountId, messageUid }: MessageDetailPanePr
     if (detail && !markedAsRead) {
       const isUnread = detail.flags && !detail.flags.some(f => f.toLowerCase() === 'seen');
       if (isUnread) {
-        api.markMessageRead(accountId, messageUid, folder).catch(() => {
+        const cacheContext = currentCursor ? {
+          cursor: currentCursor,
+          limit: pageSize || 50,
+          sort_by: 'date',
+          sort_order: 'desc'
+        } : undefined;
+
+        api.markMessageRead(accountId, messageUid, folder, cacheContext).catch(() => {
           // Silently fail - marking as read is not critical
         });
         setMarkedAsRead(true);

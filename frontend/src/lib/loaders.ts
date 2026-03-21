@@ -9,6 +9,7 @@ export async function accountsLoader() {
 export async function messagesLoader({ params, request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const accountId = params.accountId || url.searchParams.get('accountId');
+  const folder = url.searchParams.get('folder') || 'INBOX';
   const page = parseInt(url.searchParams.get('page') || '1', 10);
 
   const accounts = await api.listAccounts();
@@ -21,7 +22,7 @@ export async function messagesLoader({ params, request }: LoaderFunctionArgs) {
     try {
       // Use proper cursor format matching backend's CursorData structure
       const cursor = page > 1 ? btoa(JSON.stringify({ page: page - 1, sort_by: 'date', sort_order: 'desc' })) : '';
-      const response = await api.getMessages(selectedId, 'INBOX', 50, cursor, 'date', 'desc');
+      const response = await api.getMessages(selectedId, folder, 50, cursor, 'date', 'desc');
       messages = response.messages;
       total = response.total_count;
     } catch (err: any) {

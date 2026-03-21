@@ -401,6 +401,35 @@ func (c *IMAPClient) FetchMessageRaw(uid uint32) ([]byte, error) {
 	return extractRFC822(response)
 }
 
+// FetchMessageRawWithFlags fetches raw message content along with its flags
+func (c *IMAPClient) FetchMessageRawWithFlags(uid uint32) ([]byte, []string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	command := fmt.Sprintf("UID FETCH %d (FLAGS RFC822)", uid)
+	response, err := c.sendCommand(command)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	data, err := extractRFC822(response)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Extract flags - response might contain multiple lines, look for the FETCH line
+	var flags []string
+	lines := strings.Split(response, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "FETCH") && strings.Contains(line, "FLAGS") {
+			flags = extractFlags(line)
+			break
+		}
+	}
+
+	return data, flags, nil
+}
+
 // Search performs an IMAP search
 func (c *IMAPClient) Search(criteria string) ([]uint32, error) {
 	c.mu.Lock()
@@ -734,6 +763,9 @@ func parseFetchResponse(response string) ([]MessageEnvelope, error) {
 					currentEnvelope.Size = int64(size)
 				}
 			}
+			if strings.Contains(line, "FLAGS") {
+				currentEnvelope.Flags = extractFlags(line)
+			}
 		}
 	}
 
@@ -773,6 +805,9 @@ func parseFetchResponseWithModSeq(response string) ([]MessageEnvelope, uint64) {
 				if size, err := extractNumber(line); err == nil {
 					currentEnvelope.Size = int64(size)
 				}
+			}
+			if strings.Contains(line, "FLAGS") {
+				currentEnvelope.Flags = extractFlags(line)
 			}
 		}
 
@@ -1006,6 +1041,37 @@ func extractNumber(line string) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("no number found in line")
+}
+
+func extractFlags(line string) []string {
+	start := strings.Index(line, "FLAGS (")
+	if start == -1 {
+		// Try without parentheses for some servers
+		start = strings.Index(line, "FLAGS")
+		if start == -1 {
+			return nil
+		}
+		// Basic parsing for space separated flags after FLAGS
+		parts := strings.Fields(line[start+5:])
+		var flags []string
+		for _, p := range parts {
+			if strings.HasPrefix(p, "\\") {
+				flags = append(flags, p)
+			} else if strings.HasPrefix(p, "(") || strings.HasPrefix(p, ")") {
+				continue
+			} else {
+				break
+			}
+		}
+		return flags
+	}
+	start += 7
+	end := strings.Index(line[start:], ")")
+	if end == -1 {
+		return nil
+	}
+	flagsStr := line[start : start+end]
+	return strings.Fields(flagsStr)
 }
 
 // StreamMessage streams message content in chunks

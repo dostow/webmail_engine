@@ -290,12 +290,12 @@ func (s *MessageService) GetMessageList(
 		// Note: Empty UID list (len=0) is valid and SHOULD be cached
 		// This handles cases like: empty folder, all messages deleted, empty search results
 		if allUIDs == nil {
-			log.Printf("Skipping UID cache write: allUIDs is nil for folder %s", folder)
-		} else {
-			// Cache the UID list with metadata (including empty slices)
-			if err := s.uidListCache.Set(ctx, uidCacheKey, allUIDs, len(allUIDs), currentModSeq, client.HasQResync(), string(sortBy), string(sortOrder), "ALL"); err != nil {
-				log.Printf("Warning: failed to cache UID list: %v", err)
-			}
+			allUIDs = []uint32{}
+		}
+
+		// Cache the UID list with metadata (including empty slices)
+		if err := s.uidListCache.Set(ctx, uidCacheKey, allUIDs, len(allUIDs), currentModSeq, client.HasQResync(), string(sortBy), string(sortOrder), "ALL"); err != nil {
+			log.Printf("Warning: failed to cache UID list: %v", err)
 		}
 
 		// Log sorting strategy metrics
@@ -580,14 +580,21 @@ func (s *MessageService) GetMessage(
 	// Try cache first - check primary key (account/folder/uid)
 	cachedMsg, err := s.getCachedMessage(ctx, accountID, folder, uid)
 	if err == nil && cachedMsg != nil {
-		// Add cache metadata
-		if cachedMsg.ProcessingMetadata == nil {
-			cachedMsg.ProcessingMetadata = &models.ProcessingMetadata{}
+		// If flags field is nil, it might be an old cache entry without flags.
+		// Force a refresh from IMAP to populate them.
+		if cachedMsg.Flags == nil {
+			log.Printf("[DEBUG] Message cache hit but flags are nil, forcing refresh: account=%s, folder=%s, uid=%s", accountID, folder, uid)
+		} else {
+			// Add cache metadata
+			if cachedMsg.ProcessingMetadata == nil {
+				cachedMsg.ProcessingMetadata = &models.ProcessingMetadata{}
+			}
+			cachedMsg.ProcessingMetadata.CacheStatus = "hit"
+			log.Printf("[DEBUG] Message cache hit: account=%s, folder=%s, uid=%s, flags=%v", accountID, folder, uid, cachedMsg.Flags)
+			return cachedMsg, nil
 		}
-		cachedMsg.ProcessingMetadata.CacheStatus = "hit"
-		log.Printf("Message cache hit: account=%s, folder=%s, uid=%s", accountID, folder, uid)
-		return cachedMsg, nil
 	}
+	log.Printf("[DEBUG] Message cache miss: account=%s, folder=%s, uid=%s", accountID, folder, uid)
 
 	// Get account with decrypted credentials
 	account, err := s.accountService.GetAccountWithCredentials(ctx, accountID)
@@ -629,9 +636,9 @@ func (s *MessageService) GetMessage(
 		return nil, fmt.Errorf("invalid UID: %w", err)
 	}
 
-	// Fetch raw message
+	// Fetch raw message along with flags
 	log.Printf("Fetching message %s from folder %s", uid, folder)
-	rawData, err := client.FetchMessageRaw(uint32(uidNum))
+	rawData, imapFlags, err := client.FetchMessageRawWithFlags(uint32(uidNum))
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch message: %w", err)
 	}
@@ -652,10 +659,13 @@ func (s *MessageService) GetMessage(
 		return nil, fmt.Errorf("failed to parse message: %w", err)
 	}
 
-	// Set folder and UID context on the parsed message
+	// Set folder, UID and flags context on the parsed message
 	// (MIME parser doesn't have this context, so we add it here)
 	parseResult.Message.Folder = folder
 	parseResult.Message.UID = uid
+	parseResult.Message.Flags = s.parseFlags(imapFlags)
+	log.Printf("[DEBUG] Message live fetch: account=%s, folder=%s, uid=%s, imapFlags=%v, parsedFlags=%v", 
+		accountID, folder, uid, imapFlags, parseResult.Message.Flags)
 
 	// Add cache metadata
 	if parseResult.Message.ProcessingMetadata == nil {
@@ -813,6 +823,11 @@ func (s *MessageService) SearchMessages(
 				messages = append(messages, msg)
 			}
 		}
+	}
+
+	// Reverse messages so newest results appear first
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
 	}
 
 	return &models.SearchResult{
@@ -1322,6 +1337,7 @@ func (s *MessageService) DeleteMessage(
 	uid string,
 	folder string,
 	permanent bool,
+	cacheContext *models.CacheContext,
 ) error {
 	// Check fair-use tokens
 	success, _, err := s.scheduler.ConsumeTokens(accountID, scheduler.OpFetch, "normal")
@@ -1364,7 +1380,7 @@ func (s *MessageService) DeleteMessage(
 	defer release()
 
 	// Select folder
-	_, err = client.SelectFolder(folder)
+	folderInfo, err := client.SelectFolder(folder)
 	if err != nil {
 		return fmt.Errorf("failed to select folder: %w", err)
 	}
@@ -1394,9 +1410,37 @@ func (s *MessageService) DeleteMessage(
 		log.Printf("Warning: failed to delete message from cache: %v", err)
 	}
 
-	// Invalidate message list cache for this folder
-	if err := s.invalidateMessageListCache(ctx, accountID, folder); err != nil {
-		log.Printf("Warning: failed to invalidate message list cache: %v", err)
+	// Targeted cache invalidation
+	if cacheContext != nil {
+		cacheKey := s.messageListCache.BuildKey(
+			accountID, folder, cacheContext.Cursor, cacheContext.Limit, cacheContext.SortBy, cacheContext.SortOrder, folderInfo.UIDValidity)
+
+		if data, getErr := s.cache.Get(ctx, cacheKey); getErr == nil && len(data) > 0 {
+			var cachedList models.MessageList
+			if unmarshalErr := json.Unmarshal(data, &cachedList); unmarshalErr == nil {
+				found := false
+				for _, msg := range cachedList.Messages {
+					if msg.UID == uid {
+						found = true
+						break
+					}
+				}
+				if found {
+					if delErr := s.cache.Delete(ctx, cacheKey); delErr != nil {
+						log.Printf("Warning: failed to delete targeted cache key %s: %v", cacheKey, delErr)
+					} else {
+						log.Printf("Successfully invalidated targeted cache page for folder %s", folder)
+					}
+				} else {
+					log.Printf("Targeted cache invalidation bypassed: UID not found in cache page")
+				}
+			}
+		}
+	} else {
+		// Invalidate message list cache for this folder
+		if err := s.invalidateMessageListCache(ctx, accountID, folder); err != nil {
+			log.Printf("Warning: failed to invalidate message list cache: %v", err)
+		}
 	}
 
 	log.Printf("Deleted message %s from folder %s (permanent: %v)", uid, folder, permanent)
@@ -1410,6 +1454,7 @@ func (s *MessageService) DeleteMessages(
 	uids []string,
 	folder string,
 	permanent bool,
+	cacheContext *models.CacheContext,
 ) (int, error) {
 	// Check fair-use tokens
 	success, _, err := s.scheduler.ConsumeTokens(accountID, scheduler.OpFetch, "normal")
@@ -1426,7 +1471,7 @@ func (s *MessageService) DeleteMessages(
 
 	deletedCount := 0
 	for _, uid := range uids {
-		if err := s.DeleteMessage(ctx, accountID, uid, folder, permanent); err != nil {
+		if err := s.DeleteMessage(ctx, accountID, uid, folder, permanent, cacheContext); err != nil {
 			log.Printf("Failed to delete message %s: %v", uid, err)
 			continue
 		}
@@ -1443,6 +1488,7 @@ func (s *MessageService) MarkMessagesRead(
 	accountID string,
 	uids []string,
 	folder string,
+	cacheContext *models.CacheContext,
 ) error {
 	// Check fair-use tokens
 	success, _, err := s.scheduler.ConsumeTokens(accountID, scheduler.OpFetch, "low")
@@ -1485,7 +1531,7 @@ func (s *MessageService) MarkMessagesRead(
 	defer release()
 
 	// Select folder
-	_, err = client.SelectFolder(folder)
+	folderInfo, err := client.SelectFolder(folder)
 	if err != nil {
 		return fmt.Errorf("failed to select folder: %w", err)
 	}
@@ -1508,6 +1554,50 @@ func (s *MessageService) MarkMessagesRead(
 	err = client.Store(uidNums, []imap.Flag{imap.FlagSeen}, true)
 	if err != nil {
 		return fmt.Errorf("failed to mark messages as read: %w", err)
+	}
+
+	// Remove from individual cache
+	for _, uid := range uids {
+		_ = s.deleteCachedMessage(ctx, accountID, folder, uid, nil)
+	}
+
+	// Targeted cache invalidation
+	if cacheContext != nil {
+		cacheKey := s.messageListCache.BuildKey(
+			accountID, folder, cacheContext.Cursor, cacheContext.Limit, cacheContext.SortBy, cacheContext.SortOrder, folderInfo.UIDValidity)
+
+		// Verify uid belongs to this cache page before deleting
+		if data, getErr := s.cache.Get(ctx, cacheKey); getErr == nil && len(data) > 0 {
+			var cachedList models.MessageList
+			if unmarshalErr := json.Unmarshal(data, &cachedList); unmarshalErr == nil {
+				found := false
+				for _, msg := range cachedList.Messages {
+					for _, targetUID := range uids {
+						if msg.UID == targetUID {
+							found = true
+							break
+						}
+					}
+					if found {
+						break
+					}
+				}
+				if found {
+					if delErr := s.cache.Delete(ctx, cacheKey); delErr != nil {
+						log.Printf("Warning: failed to delete targeted cache key %s: %v", cacheKey, delErr)
+					} else {
+						log.Printf("Successfully invalidated targeted cache page for folder %s", folder)
+					}
+				} else {
+					log.Printf("Targeted cache invalidation bypassed: UIDs not found in cache page")
+				}
+			}
+		}
+	} else {
+		// Fallback to flushing entire cache if no context provided
+		if err := s.invalidateMessageListCache(ctx, accountID, folder); err != nil {
+			log.Printf("Warning: failed to invalidate message list cache: %v", err)
+		}
 	}
 
 	log.Printf("Marked %d messages as read in folder %s", len(uidNums), folder)

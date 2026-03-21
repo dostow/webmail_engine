@@ -95,6 +95,14 @@ const (
 	SortOrderDesc SortOrder = "desc"
 )
 
+// CacheContext represents the pagination context for targeted cache invalidation
+type CacheContext struct {
+	Cursor    string    `json:"cursor"`
+	Limit     int       `json:"limit"`
+	SortBy    SortField `json:"sort_by"`
+	SortOrder SortOrder `json:"sort_order"`
+}
+
 // ContentType represents MIME content types
 type ContentType string
 

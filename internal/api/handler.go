@@ -672,11 +672,20 @@ func (h *APIHandler) markMessageRead(c *gin.Context) {
 		return
 	}
 
+	var req struct {
+		Folder       string               `json:"folder"`
+		CacheContext *models.CacheContext `json:"cache_context"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	if folder == "" && req.Folder != "" {
+		folder = req.Folder
+	}
 	if folder == "" {
 		folder = "INBOX"
 	}
 
-	err := h.messageService.MarkMessagesRead(c.Request.Context(), accountID, []string{messageUID}, folder)
+	err := h.messageService.MarkMessagesRead(c.Request.Context(), accountID, []string{messageUID}, folder, req.CacheContext)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -697,8 +706,9 @@ func (h *APIHandler) markMessagesRead(c *gin.Context) {
 	}
 
 	var req struct {
-		UIDs   []string `json:"uids"`
-		Folder string   `json:"folder"`
+		UIDs         []string             `json:"uids"`
+		Folder       string               `json:"folder"`
+		CacheContext *models.CacheContext `json:"cache_context"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -716,7 +726,7 @@ func (h *APIHandler) markMessagesRead(c *gin.Context) {
 		folder = "INBOX"
 	}
 
-	err := h.messageService.MarkMessagesRead(c.Request.Context(), accountID, req.UIDs, folder)
+	err := h.messageService.MarkMessagesRead(c.Request.Context(), accountID, req.UIDs, folder, req.CacheContext)
 	if err != nil {
 		respondError(c, err)
 		return

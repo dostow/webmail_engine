@@ -89,11 +89,12 @@ export function MessagesView() {
     messageListStore.refresh();
   };
 
-  // Use messages from message list store when available, otherwise use loader data
-  // The store is the single source of truth once the user interacts with the UI
-  const displayMessages = messageListStore.messages.length > 0 ? messageListStore.messages : loaderMessages;
-  const displayTotal = messageListStore.total > 0 ? messageListStore.total : loaderTotal;
-  const displayLoading = messageListStore.loading || (messageListStore.accountId && loading);
+  // Use messages from message list store when it's synced with the current view,
+  // otherwise fallback to loader data (primarily for the initial load).
+  const isStoreSynced = messageListStore.accountId === effectiveAccountId && messageListStore.folder === selectedFolder;
+  const displayMessages = isStoreSynced ? messageListStore.messages : loaderMessages;
+  const displayTotal = isStoreSynced ? messageListStore.total : loaderTotal;
+  const displayLoading = isStoreSynced ? messageListStore.loading : loading;
 
   return (
     <div className="w-full h-full flex flex-col min-h-0">

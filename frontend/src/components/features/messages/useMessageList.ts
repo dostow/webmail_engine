@@ -12,6 +12,7 @@ export interface MessageListState {
   currentPage: number;
   pageSize: number;
   totalPages: number;
+  currentCursor?: string; // The exact cursor string used to fetch the current page
   nextCursor?: string;
   lastUid?: number; // Last UID from current page for stable pagination
 
@@ -77,12 +78,12 @@ export const useMessageList = create<MessageListState>((set, get) => ({
   accountId: null,
 
   setAccount: async (accountId) => {
-    set({ accountId, loading: true, error: null, currentPage: 1, lastUid: undefined });
+    set({ accountId, messages: [], total: 0, loading: true, error: null, currentPage: 1, lastUid: undefined });
     await get().refresh();
   },
 
   setFolder: async (folder) => {
-    set({ folder, loading: true, error: null, currentPage: 1, lastUid: undefined });
+    set({ folder, messages: [], total: 0, loading: true, error: null, currentPage: 1, lastUid: undefined });
     await get().refresh();
   },
 
@@ -120,6 +121,7 @@ export const useMessageList = create<MessageListState>((set, get) => ({
         pageSize: response.page_size,
         currentPage: response.current_page,
         totalPages: response.total_pages,
+        currentCursor: cursor,
         nextCursor: response.next_cursor,
         lastUid: newLastUid,
         loading: false,
@@ -179,6 +181,7 @@ export const useMessageList = create<MessageListState>((set, get) => ({
         pageSize: response.page_size,
         currentPage: response.current_page,
         totalPages: response.total_pages,
+        currentCursor: cursor,
         nextCursor: response.next_cursor,
         lastUid: newLastUid,
         loading: false,
@@ -197,6 +200,7 @@ export const useMessageList = create<MessageListState>((set, get) => ({
       total: 0,
       currentPage: 1,
       totalPages: 1,
+      currentCursor: undefined,
       nextCursor: undefined,
       lastUid: undefined,
       accountId: null,

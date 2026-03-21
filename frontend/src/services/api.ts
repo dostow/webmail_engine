@@ -14,6 +14,13 @@ import type {
   PoolStats,
 } from '../types';
 
+export interface CacheContext {
+  cursor: string;
+  limit: number;
+  sort_by: string;
+  sort_order: string;
+}
+
 import { useAppStore } from '../store/useAppStore';
 
 const getApiBaseUrl = () => useAppStore.getState().apiUrl || import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
@@ -284,14 +291,19 @@ export async function getFolderTree(accountId: string): Promise<{ folders: any[]
 export async function markMessageRead(
   accountId: string,
   uid: string,
-  folder?: string
+  folder?: string,
+  cacheContext?: CacheContext
 ): Promise<void> {
   const params = new URLSearchParams();
   if (folder) params.set('folder', folder);
 
   const response = await fetch(
     `${getApiBaseUrl()}/v1/accounts/${accountId}/messages/${uid}/mark-read?${params}`,
-    { method: 'POST' }
+    { 
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cache_context: cacheContext })
+    }
   );
   if (!response.ok) {
     const error = await response.json();
@@ -302,12 +314,13 @@ export async function markMessageRead(
 export async function markMessagesRead(
   accountId: string,
   uids: string[],
-  folder?: string
+  folder?: string,
+  cacheContext?: CacheContext
 ): Promise<void> {
   const response = await fetch(`${getApiBaseUrl()}/v1/accounts/${accountId}/messages/mark-read`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ uids, folder: folder || 'INBOX' }),
+    body: JSON.stringify({ uids, folder: folder || 'INBOX', cache_context: cacheContext }),
   });
   if (!response.ok) {
     const error = await response.json();

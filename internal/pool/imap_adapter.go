@@ -492,6 +492,54 @@ func (a *IMAPAdapter) FetchMessageRaw(uid uint32) ([]byte, error) {
 	return nil, fmt.Errorf("message content not found")
 }
 
+// FetchMessageRawWithFlags fetches raw message content along with its flags
+func (a *IMAPAdapter) FetchMessageRawWithFlags(uid uint32) ([]byte, []string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Fetch RFC822 (entire message) and FLAGS
+	uidSet := imap.UIDSet{imap.UIDRange{Start: imap.UID(uid), Stop: imap.UID(uid)}}
+	fetchOptions := &imap.FetchOptions{
+		Flags: true,
+		BodySection: []*imap.FetchItemBodySection{
+			{Specifier: imap.PartSpecifierNone},
+		},
+	}
+
+	messages, err := a.client.Fetch(uidSet, fetchOptions).Collect()
+	if err != nil {
+		if isConnectionError(err) {
+			a.mu.Unlock()
+			a.invalidate()
+			a.mu.Lock()
+		}
+		return nil, nil, err
+	}
+
+	if len(messages) == 0 {
+		return nil, nil, fmt.Errorf("message not found")
+	}
+
+	msg := messages[0]
+	log.Printf("[DEBUG] IMAP Fetch raw with flags: UID=%d, hasFlags=%v, numFlags=%d, bodyLen=%d", 
+		msg.UID, msg.Flags != nil, len(msg.Flags), len(msg.FindBodySection(&imap.FetchItemBodySection{Specifier: imap.PartSpecifierNone})))
+
+	// Extract flags
+	flags := make([]string, len(msg.Flags))
+	for i, f := range msg.Flags {
+		flags[i] = string(f)
+	}
+
+	// Find body section data using FindBodySection
+	bodySection := &imap.FetchItemBodySection{Specifier: imap.PartSpecifierNone}
+	bodyBytes := msg.FindBodySection(bodySection)
+	if len(bodyBytes) > 0 {
+		return bodyBytes, flags, nil
+	}
+
+	return nil, nil, fmt.Errorf("message content not found")
+}
+
 // Search performs an IMAP search
 func (a *IMAPAdapter) Search(criteria string) ([]uint32, error) {
 	a.mu.Lock()

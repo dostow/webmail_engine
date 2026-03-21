@@ -349,6 +349,7 @@ type MessageBody struct {
 // Attachment represents an email attachment
 type Attachment struct {
 	ID          string     `json:"id"`
+	PartID      string     `json:"part_id,omitempty"` // IMAP body part identifier
 	Filename    string     `json:"filename"`
 	ContentType string     `json:"content_type"`
 	Size        int64      `json:"size"`

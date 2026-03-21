@@ -578,11 +578,29 @@ func (s *MessageService) GetMessage(
 	}
 
 	// Try cache first - check primary key (account/folder/uid)
-	cachedMsg, err := s.getCachedMessage(ctx, accountID, folder, uid)
+	cachedMsg, missingAtts, err := s.getCachedMessage(ctx, accountID, folder, uid)
 	if err == nil && cachedMsg != nil {
-		// If flags field is nil, it might be an old cache entry without flags.
-		// Force a refresh from IMAP to populate them.
-		if cachedMsg.Flags == nil {
+		// Auto-healing: If some attachments are missing from the cache/storage,
+		// fetch ONLY those parts from IMAP instead of re-fetching the whole message.
+		if len(missingAtts) > 0 {
+			log.Printf("[DEBUG] Message cache hit but %d attachments are missing, starting selective healing: account=%s, folder=%s, uid=%s", len(missingAtts), accountID, folder, uid)
+			
+			// Re-fetch only the missing parts
+			if err := s.healMissingAttachments(ctx, accountID, folder, uid, cachedMsg, missingAtts); err != nil {
+				log.Printf("Warning: focused healing failed: %v. Falling back to full re-fetch.", err)
+				// Fall through to full re-fetch if healing fails
+			} else {
+				// Healing succeeded, return the healed message
+				if cachedMsg.ProcessingMetadata == nil {
+					cachedMsg.ProcessingMetadata = &models.ProcessingMetadata{}
+				}
+				cachedMsg.ProcessingMetadata.CacheStatus = "hit"
+				cachedMsg.ProcessingMetadata.ProcessingTime = 0 // Healed from cache+parts
+				return cachedMsg, nil
+			}
+		} else if cachedMsg.Flags == nil {
+			// If flags field is nil, it might be an old cache entry without flags.
+			// Force a refresh from IMAP to populate them.
 			log.Printf("[DEBUG] Message cache hit but flags are nil, forcing refresh: account=%s, folder=%s, uid=%s", accountID, folder, uid)
 		} else {
 			// Add cache metadata
@@ -594,7 +612,7 @@ func (s *MessageService) GetMessage(
 			return cachedMsg, nil
 		}
 	}
-	log.Printf("[DEBUG] Message cache miss: account=%s, folder=%s, uid=%s", accountID, folder, uid)
+	log.Printf("[DEBUG] Message cache miss or invalid: account=%s, folder=%s, uid=%s", accountID, folder, uid)
 
 	// Get account with decrypted credentials
 	account, err := s.accountService.GetAccountWithCredentials(ctx, accountID)
@@ -676,24 +694,54 @@ func (s *MessageService) GetMessage(
 	parseResult.Message.ProcessingMetadata.SizeOriginal = int64(len(rawData))
 
 	// Store ALL attachments from parse result BEFORE caching
-	// This ensures attachment IDs in the message match what's in storage
+	// Use independent attachment cache to avoid redundant storage
 	for i := range parseResult.Attachments {
 		att := &parseResult.Attachments[i]
 		if att.Data != nil {
 			oldID := att.ID
 
-			id, err := s.storage.Store(accountID, folder, uid, att.Filename, att.Data)
-			if err != nil {
-				log.Printf("Warning: failed to store attachment %s: %v", att.Filename, err)
-				continue
-			}
-			att.ID = id
+			// Check independent attachment cache first
+			// Calculate content-based ID manually to check cache
+			contentHash := sha256.Sum256(att.Data)
+			hashInput := fmt.Sprintf("%s:%s:%s:%s:%x", accountID, folder, uid, att.Filename, contentHash)
+			id := fmt.Sprintf("%x", sha256.Sum256([]byte(hashInput)))[:16]
 
-			// Update corresponding message attachment
+			cachedAtt, _ := s.cache.GetAttachmentInfo(ctx, id)
+			if cachedAtt != nil {
+				log.Printf("[DEBUG] Attachment cache hit: id=%s, filename=%s", id, att.Filename)
+				att.ID = id
+			} else {
+				// Cache miss or invalidated, store on disk
+				newID, err := s.storage.Store(accountID, folder, uid, att.Filename, att.Data)
+				if err != nil {
+					log.Printf("Warning: failed to store attachment %s: %v", att.Filename, err)
+					continue
+				}
+				att.ID = newID
+
+				// Update independent attachment cache
+				modelAtt := &models.Attachment{
+					ID:          att.ID,
+					PartID:      att.PartID,
+					Filename:    att.Filename,
+					ContentType: att.ContentType,
+					Size:        att.Size,
+					Disposition: att.Disposition,
+					ContentID:   att.ContentID,
+					Checksum:    att.Checksum,
+				}
+				if err := s.cache.SetAttachmentInfo(ctx, modelAtt); err != nil {
+					log.Printf("Warning: failed to cache attachment info: %v", err)
+				}
+			}
+
+			// Update corresponding message attachment references
 			for j := range parseResult.Message.Attachments {
 				msgAtt := &parseResult.Message.Attachments[j]
 				if msgAtt.ID == oldID || msgAtt.Filename == att.Filename {
-					msgAtt.ID = id
+					msgAtt.ID = att.ID
+					msgAtt.PartID = att.PartID
+					msgAtt.Checksum = att.Checksum
 					break
 				}
 			}
@@ -1111,27 +1159,27 @@ func (s *MessageService) buildMessageCacheKey(accountID, folder, uid string) str
 }
 
 // getCachedMessageByContent tries to get a message from cache using content hash
-// Returns the message if found via content-based deduplication
+// Returns the message and any missing attachments if found via content-based deduplication
 func (s *MessageService) getCachedMessageByContent(
 	ctx context.Context,
 	accountID string,
 	msg *models.Message,
-) (*models.Message, error) {
+) (*models.Message, []models.Attachment, error) {
 	if s.cache == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// Generate content hash
 	contentHash := s.generateContentHash(msg)
 	if contentHash == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// Try to get the primary key from content hash index
 	hashKey := s.buildContentCacheKey(contentHash)
 	data, err := s.cache.Get(ctx, hashKey)
 	if err != nil || len(data) == 0 {
-		return nil, nil // Cache miss
+		return nil, nil, nil // Cache miss
 	}
 
 	// Get the primary cache key from the hash index
@@ -1142,18 +1190,28 @@ func (s *MessageService) getCachedMessageByContent(
 	if err != nil || len(msgData) == 0 {
 		// Hash index points to non-existent message, clean up
 		_ = s.cache.Delete(ctx, hashKey)
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// Unmarshal message
 	var cachedMsg models.Message
 	if err := json.Unmarshal(msgData, &cachedMsg); err != nil {
 		log.Printf("Failed to unmarshal cached message: %v", err)
-		return nil, err
+		return nil, nil, err
 	}
 
-	log.Printf("Cache hit via content hash: hash=%s, primaryKey=%s", contentHash, primaryKey)
-	return &cachedMsg, nil
+	// Verify all attachments exist in the independent metadata cache
+	var missing []models.Attachment
+	for _, att := range cachedMsg.Attachments {
+		cachedAtt, _ := s.cache.GetAttachmentInfo(ctx, att.ID)
+		if cachedAtt == nil {
+			log.Printf("[DEBUG] Content cache hit but attachment %s (name=%s, part=%s) is missing", att.ID, att.Filename, att.PartID)
+			missing = append(missing, att)
+		}
+	}
+
+	log.Printf("Cache hit via content hash: hash=%s, primaryKey=%s (missing %d attachments)", contentHash, primaryKey, len(missing))
+	return &cachedMsg, missing, nil
 }
 
 // setCachedMessageWithDedup stores a message in cache with content-based deduplication
@@ -1206,25 +1264,35 @@ func (s *MessageService) setCachedMessageWithDedup(
 func (s *MessageService) getCachedMessage(
 	ctx context.Context,
 	accountID, folder, uid string,
-) (*models.Message, error) {
+) (*models.Message, []models.Attachment, error) {
 	if s.cache == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	cacheKey := s.buildMessageCacheKey(accountID, folder, uid)
 	data, err := s.cache.Get(ctx, cacheKey)
 	if err != nil || len(data) == 0 {
-		return nil, nil // Cache miss
+		return nil, nil, nil // Cache miss
 	}
 
 	var msg models.Message
 	if err := json.Unmarshal(data, &msg); err != nil {
 		log.Printf("Failed to unmarshal cached message: %v", err)
-		return nil, err
+		return nil, nil, err
 	}
 
-	log.Printf("Cache hit: key=%s", cacheKey)
-	return &msg, nil
+	// Verify all attachments exist in the independent metadata cache
+	var missing []models.Attachment
+	for _, att := range msg.Attachments {
+		cachedAtt, _ := s.cache.GetAttachmentInfo(ctx, att.ID)
+		if cachedAtt == nil {
+			log.Printf("[DEBUG] Message cache hit but attachment %s (name=%s, part=%s) is missing from metadata cache", att.ID, att.Filename, att.PartID)
+			missing = append(missing, att)
+		}
+	}
+
+	log.Printf("Cache hit: key=%s (missing %d attachments)", cacheKey, len(missing))
+	return &msg, missing, nil
 }
 
 // deleteCachedMessage removes a message from cache (both primary key and content hash)
@@ -2444,7 +2512,91 @@ func (s *MessageService) searchByDateRange(
 	return uids, nil
 }
 
-// sortEnvelopes sorts message envelopes client-side
+// healMissingAttachments attempts to recover missing attachments by fetching only the necessary parts from IMAP
+func (s *MessageService) healMissingAttachments(
+	ctx context.Context,
+	accountID, folder, uidStr string,
+	msg *models.Message,
+	missing []models.Attachment,
+) error {
+	uid, _ := strconv.ParseUint(uidStr, 10, 32)
+	
+	// Get account with decrypted credentials
+	account, err := s.accountService.GetAccountWithCredentials(ctx, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to get account: %w", err)
+	}
+
+	imapConfig := pool.IMAPConfig{
+		Host:       account.IMAPConfig.Host,
+		Port:       account.IMAPConfig.Port,
+		Username:   account.IMAPConfig.Username,
+		Password:   account.IMAPConfig.Password,
+		Encryption: account.IMAPConfig.Encryption,
+	}
+
+	// Acquire IMAP session
+	client, release, err := s.sessions.Acquire(ctx, accountID, imapConfig)
+	if err != nil {
+		return fmt.Errorf("failed to acquire IMAP session: %w", err)
+	}
+	defer release()
+
+	// Select folder
+	if _, err := client.SelectFolder(folder); err != nil {
+		return fmt.Errorf("failed to select folder %s: %w", folder, err)
+	}
+
+	healedCount := 0
+	for _, miss := range missing {
+		if miss.PartID == "" {
+			log.Printf("[DEBUG] Cannot heal attachment %s: missing PartID", miss.Filename)
+			continue
+		}
+
+		log.Printf("[DEBUG] Healing attachment %s (part %s) from IMAP...", miss.Filename, miss.PartID)
+		data, err := client.FetchPart(uint32(uid), miss.PartID)
+		if err != nil {
+			log.Printf("Warning: failed to fetch part %s for healing: %v", miss.PartID, err)
+			continue
+		}
+
+		// Store and cache newly fetched attachment
+		newID, err := s.storage.Store(accountID, folder, uidStr, miss.Filename, data)
+		if err != nil {
+			log.Printf("Warning: failed to store healed attachment %s: %v", miss.Filename, err)
+			continue
+		}
+
+		// Update independent attachment cache
+		modelAtt := miss // Copy
+		modelAtt.ID = newID
+		if err := s.cache.SetAttachmentInfo(ctx, &modelAtt); err != nil {
+			log.Printf("Warning: failed to cache healed attachment info: %v", err)
+		}
+
+		// Update message attachment reference
+		for i := range msg.Attachments {
+			if msg.Attachments[i].PartID == miss.PartID || msg.Attachments[i].Filename == miss.Filename {
+				msg.Attachments[i].ID = newID
+				break
+			}
+		}
+		healedCount++
+	}
+
+	if healedCount == 0 {
+		return fmt.Errorf("failed to heal any attachments")
+	}
+
+	// Re-cache the healed message
+	if err := s.setCachedMessageWithDedup(ctx, accountID, msg); err != nil {
+		log.Printf("Warning: failed to update message cache after healing: %v", err)
+	}
+
+	log.Printf("[DEBUG] Successfully healed %d/%d attachments for message %s", healedCount, len(missing), uidStr)
+	return nil
+}
 func (s *MessageService) sortEnvelopes(
 	envelopes []pool.MessageEnvelope,
 	sortBy models.SortField,

@@ -32,6 +32,7 @@ type ParseResult struct {
 // ParsedAttachment represents a parsed attachment
 type ParsedAttachment struct {
 	ID          string
+	PartID      string
 	Filename    string
 	ContentType string
 	Data        []byte
@@ -217,6 +218,7 @@ func (p *MIMEParser) toContacts(addrs []*mail.Address) []models.Contact {
 func (p *MIMEParser) addAttachment(part *enmime.Part, disposition string, result *ParseResult, config ParseConfig) {
 	attachment := ParsedAttachment{
 		ID:          p.generateAttachmentID(),
+		PartID:      part.PartID,
 		Filename:    part.FileName,
 		ContentType: part.ContentType,
 		Data:        part.Content,
@@ -235,6 +237,7 @@ func (p *MIMEParser) addAttachment(part *enmime.Part, disposition string, result
 		}
 		result.Message.Attachments = append(result.Message.Attachments, models.Attachment{
 			ID:          attachment.ID,
+			PartID:      attachment.PartID,
 			Filename:    attachment.Filename,
 			ContentType: attachment.ContentType,
 			Size:        attachment.Size,

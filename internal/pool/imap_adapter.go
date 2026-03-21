@@ -540,6 +540,51 @@ func (a *IMAPAdapter) FetchMessageRawWithFlags(uid uint32) ([]byte, []string, er
 	return nil, nil, fmt.Errorf("message content not found")
 }
 
+// FetchPart fetches a specific body part of a message
+func (a *IMAPAdapter) FetchPart(uid uint32, partID string) ([]byte, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if partID == "" {
+		return nil, fmt.Errorf("part ID is empty")
+	}
+
+	uidSet := imap.UIDSet{imap.UIDRange{Start: imap.UID(uid), Stop: imap.UID(uid)}}
+	
+	// Create body section specifier for the specific part
+	// Note: go-imap/v2 uses a string-based part ID in PartSpecifier
+	fetchOptions := &imap.FetchOptions{
+		BodySection: []*imap.FetchItemBodySection{
+			{Specifier: imap.PartSpecifier(partID)},
+		},
+	}
+
+	messages, err := a.client.Fetch(uidSet, fetchOptions).Collect()
+	if err != nil {
+		if isConnectionError(err) {
+			a.mu.Unlock()
+			a.invalidate()
+			a.mu.Lock()
+		}
+		return nil, err
+	}
+
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("message not found")
+	}
+
+	msg := messages[0]
+	
+	// Find the specific body section
+	bodySection := &imap.FetchItemBodySection{Specifier: imap.PartSpecifier(partID)}
+	partData := msg.FindBodySection(bodySection)
+	if len(partData) > 0 {
+		return partData, nil
+	}
+
+	return nil, fmt.Errorf("part %s not found in message %d", partID, uid)
+}
+
 // Search performs an IMAP search
 func (a *IMAPAdapter) Search(criteria string) ([]uint32, error) {
 	a.mu.Lock()

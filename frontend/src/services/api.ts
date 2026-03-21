@@ -161,6 +161,48 @@ export async function sendEmail(
   return handleResponse<SendEmailResponse>(response);
 }
 
+// Attachment APIs
+export async function getAttachmentDownloadUrl(
+  accountId: string,
+  messageUid: string,
+  attachmentId: string
+): Promise<{ download_url: string; expires_at: string; filename: string; content_type: string; size: number }> {
+  const response = await fetch(
+    `${getApiBaseUrl()}/v1/accounts/${accountId}/messages/${messageUid}/attachments/${attachmentId}`
+  );
+  return handleResponse(response);
+}
+
+export async function downloadAttachment(
+  accountId: string,
+  messageUid: string,
+  attachmentId: string,
+  filename: string
+) {
+  const response = await fetch(
+    `${getApiBaseUrl()}/v1/accounts/${accountId}/messages/${messageUid}/attachments/${attachmentId}`,
+    {
+      headers: {
+        'Accept': 'application/octet-stream',
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error('Failed to download attachment');
+  }
+
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+}
+
 // Health APIs
 export async function getSystemHealth(): Promise<SystemHealthResponse> {
   const response = await fetch(`${getApiBaseUrl()}/v1/health`);

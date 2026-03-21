@@ -6,239 +6,204 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sync"
-	"time"
 )
 
-// AttachmentStorage handles temporary attachment storage
-type AttachmentStorage struct {
-	basePath    string
-	mu          sync.RWMutex
-	attachments map[string]*AttachmentInfo
-	cleanupChan chan struct{}
+// AttachmentStorage defines the interface for attachment storage implementations
+type AttachmentStorage interface {
+	// Store stores attachment data and returns the attachment ID
+	// accountID, folder, messageUID provide context for organization
+	Store(accountID, folder, messageUID, filename string, data []byte) (string, error)
+
+	// Get retrieves attachment data by account, folder, message, and attachment ID
+	Get(accountID, folder, messageUID, attachmentID string) ([]byte, error)
+
+	// Delete removes an attachment by account, folder, message, and attachment ID
+	Delete(accountID, folder, messageUID, attachmentID string) error
+
+	// DeleteMessageAttachments removes all attachments for a message
+	DeleteMessageAttachments(accountID, folder, messageUID string) error
+
+	// Exists checks if an attachment exists
+	Exists(accountID, folder, messageUID, attachmentID string) bool
+
+	// Path returns the file path for an attachment (for direct file serving)
+	Path(accountID, folder, messageUID, attachmentID string) string
+
+	// Cleanup removes all attachments (use with caution)
+	Cleanup() int
+
+	// GetStats returns storage statistics
+	GetStats() StorageStats
+
+	// Shutdown gracefully stops the storage backend (no-op for file storage)
+	Shutdown()
 }
 
-// AttachmentInfo stores attachment metadata
-type AttachmentInfo struct {
-	ID        string
-	Path      string
-	Checksum  string
-	Size      int64
-	CreatedAt time.Time
-	ExpiresAt time.Time
-	Downloads int
+// StorageStats holds storage statistics
+type StorageStats struct {
+	Count     int   `json:"count"`
+	TotalSize int64 `json:"total_size"`
 }
 
-// NewAttachmentStorage creates a new attachment storage
-func NewAttachmentStorage(basePath string) *AttachmentStorage {
+// FileAttachmentStorage implements AttachmentStorage using the local filesystem
+// Directory structure: basePath/accountID/folder/messageUID/attachmentID
+type FileAttachmentStorage struct {
+	basePath string
+}
+
+// NewFileAttachmentStorage creates a new file-based attachment storage
+func NewFileAttachmentStorage(basePath string) AttachmentStorage {
 	if basePath == "" {
 		basePath = "./temp/attachments"
 	}
-	
-	storage := &AttachmentStorage{
-		basePath:    basePath,
-		attachments: make(map[string]*AttachmentInfo),
-		cleanupChan: make(chan struct{}),
-	}
-	
+
 	// Ensure base path exists
 	os.MkdirAll(basePath, 0755)
-	
-	// Start cleanup goroutine
-	go storage.startCleanup()
-	
-	return storage
+
+	return &FileAttachmentStorage{
+		basePath: basePath,
+	}
 }
 
-// Store stores attachment data and returns the path
-func (s *AttachmentStorage) Store(data []byte, checksum string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	
-	// Generate ID from checksum
-	id := fmt.Sprintf("%x", sha256.Sum256([]byte(checksum+time.Now().String())))[:16]
-	
-	// Create subdirectory based on date
-	datePath := time.Now().Format("2006/01/02")
-	dirPath := filepath.Join(s.basePath, datePath)
-	if err := os.MkdirAll(dirPath, 0755); err != nil {
-		return "", err
+// Store stores attachment data and returns the attachment ID
+// Directory structure: basePath/accountID/folder/messageUID/attachmentID
+func (s *FileAttachmentStorage) Store(accountID, folder, messageUID, filename string, data []byte) (string, error) {
+	// Generate attachment ID from filename + content (first 16 chars of SHA256)
+	hashInput := fmt.Sprintf("%s:%s:%s:%s", accountID, folder, messageUID, filename)
+	id := fmt.Sprintf("%x", sha256.Sum256([]byte(hashInput)))[:16]
+
+	// Create directory structure: accountID/folder/messageUID
+	// Sanitize folder name (replace / with _)
+	safeFolder := filepath.Base(folder)
+	dir := filepath.Join(s.basePath, accountID, safeFolder, messageUID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create directory: %w", err)
 	}
-	
-	// Create file
-	filename := fmt.Sprintf("%s.dat", id)
-	filePath := filepath.Join(dirPath, filename)
-	
-	file, err := os.Create(filePath)
-	if err != nil {
-		return "", err
+
+	// Write file
+	path := filepath.Join(dir, id)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
 	}
-	defer file.Close()
-	
-	// Write data
-	_, err = file.Write(data)
-	if err != nil {
-		os.Remove(filePath)
-		return "", err
-	}
-	
-	// Store metadata
-	info := &AttachmentInfo{
-		ID:        id,
-		Path:      filePath,
-		Checksum:  checksum,
-		Size:      int64(len(data)),
-		CreatedAt: time.Now(),
-		ExpiresAt: time.Now().Add(24 * time.Hour),
-		Downloads: 0,
-	}
-	
-	s.attachments[id] = info
-	
-	return filePath, nil
+
+	return id, nil
 }
 
-// Get retrieves attachment data
-func (s *AttachmentStorage) Get(id string) ([]byte, error) {
-	s.mu.RLock()
-	info, exists := s.attachments[id]
-	s.mu.RUnlock()
-	
-	if !exists {
-		return nil, fmt.Errorf("attachment not found")
-	}
-	
-	// Check expiry
-	if time.Now().After(info.ExpiresAt) {
-		return nil, fmt.Errorf("attachment expired")
-	}
-	
-	// Read file
-	data, err := os.ReadFile(info.Path)
+// Get retrieves attachment data by account, folder, message, and attachment ID
+func (s *FileAttachmentStorage) Get(accountID, folder, messageUID, attachmentID string) ([]byte, error) {
+	path := s.Path(accountID, folder, messageUID, attachmentID)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("attachment not found")
+		}
+		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
-	
-	// Update download count
-	s.mu.Lock()
-	info.Downloads++
-	s.mu.Unlock()
-	
+
 	return data, nil
 }
 
-// GetReader returns a reader for streaming attachment
-func (s *AttachmentStorage) GetReader(id string) (io.ReadCloser, error) {
-	s.mu.RLock()
-	info, exists := s.attachments[id]
-	s.mu.RUnlock()
-	
-	if !exists {
-		return nil, fmt.Errorf("attachment not found")
-	}
-	
-	// Check expiry
-	if time.Now().After(info.ExpiresAt) {
-		return nil, fmt.Errorf("attachment expired")
-	}
-	
-	// Open file
-	file, err := os.Open(info.Path)
+// GetReader returns a reader for streaming attachment (for large files)
+func (s *FileAttachmentStorage) GetReader(accountID, folder, messageUID, attachmentID string) (io.ReadCloser, error) {
+	path := s.Path(accountID, folder, messageUID, attachmentID)
+	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("attachment not found")
+		}
+		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
-	
-	// Update download count
-	s.mu.Lock()
-	info.Downloads++
-	s.mu.Unlock()
-	
+
 	return file, nil
 }
 
-// Delete removes an attachment
-func (s *AttachmentStorage) Delete(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	
-	info, exists := s.attachments[id]
-	if !exists {
-		return fmt.Errorf("attachment not found")
+// Delete removes an attachment by account, folder, message, and attachment ID
+func (s *FileAttachmentStorage) Delete(accountID, folder, messageUID, attachmentID string) error {
+	path := s.Path(accountID, folder, messageUID, attachmentID)
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("attachment not found")
+		}
+		return fmt.Errorf("failed to delete file: %w", err)
 	}
-	
-	// Remove file
-	if err := os.Remove(info.Path); err != nil {
-		return err
-	}
-	
-	delete(s.attachments, id)
-	
+
 	return nil
 }
 
-// GetInfo returns attachment info
-func (s *AttachmentStorage) GetInfo(id string) (*AttachmentInfo, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	
-	info, exists := s.attachments[id]
-	if !exists {
-		return nil, fmt.Errorf("attachment not found")
+// DeleteMessageAttachments removes all attachments for a message
+func (s *FileAttachmentStorage) DeleteMessageAttachments(accountID, folder, messageUID string) error {
+	safeFolder := filepath.Base(folder)
+	dir := filepath.Join(s.basePath, accountID, safeFolder, messageUID)
+	if err := os.RemoveAll(dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil // Already deleted
+		}
+		return fmt.Errorf("failed to delete message attachments: %w", err)
 	}
-	
-	return info, nil
+
+	return nil
 }
 
-// Cleanup removes expired attachments
-func (s *AttachmentStorage) Cleanup() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	
-	now := time.Now()
+// Exists checks if an attachment exists
+func (s *FileAttachmentStorage) Exists(accountID, folder, messageUID, attachmentID string) bool {
+	path := s.Path(accountID, folder, messageUID, attachmentID)
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// Path returns the file path for an attachment (for direct file serving)
+func (s *FileAttachmentStorage) Path(accountID, folder, messageUID, attachmentID string) string {
+	safeFolder := filepath.Base(folder)
+	return filepath.Join(s.basePath, accountID, safeFolder, messageUID, attachmentID)
+}
+
+// Cleanup removes all attachments (use with caution)
+// Returns the number of files removed
+func (s *FileAttachmentStorage) Cleanup() int {
 	removed := 0
-	
-	for id, info := range s.attachments {
-		if now.After(info.ExpiresAt) {
-			os.Remove(info.Path)
-			delete(s.attachments, id)
-			removed++
+
+	err := filepath.Walk(s.basePath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip errors, continue walking
 		}
+
+		if !info.IsDir() {
+			if err := os.Remove(path); err == nil {
+				removed++
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return removed
 	}
-	
+
 	return removed
 }
 
-// startCleanup runs periodic cleanup
-func (s *AttachmentStorage) startCleanup() {
-	ticker := time.NewTicker(1 * time.Hour)
-	defer ticker.Stop()
-	
-	for {
-		select {
-		case <-ticker.C:
-			s.Cleanup()
-		case <-s.cleanupChan:
-			return
-		}
-	}
-}
-
-// Shutdown stops the storage
-func (s *AttachmentStorage) Shutdown() {
-	close(s.cleanupChan)
-}
-
 // GetStats returns storage statistics
-func (s *AttachmentStorage) GetStats() (int, int64) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	
-	count := len(s.attachments)
-	var totalSize int64
-	
-	for _, info := range s.attachments {
-		totalSize += info.Size
-	}
-	
-	return count, totalSize
+func (s *FileAttachmentStorage) GetStats() StorageStats {
+	stats := StorageStats{}
+
+	filepath.Walk(s.basePath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		if !info.IsDir() {
+			stats.Count++
+			stats.TotalSize += info.Size()
+		}
+
+		return nil
+	})
+
+	return stats
+}
+
+// Shutdown gracefully stops the storage backend (no-op for file storage)
+func (s *FileAttachmentStorage) Shutdown() {
+	// No-op for file-based storage
 }

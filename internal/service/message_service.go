@@ -35,7 +35,7 @@ type MessageService struct {
 	uidListCache     *messagecache.UIDListCache
 	scheduler        *scheduler.FairUseScheduler
 	parser           *mimeparser.MIMEParser
-	storage          *storage.AttachmentStorage
+	storage          storage.AttachmentStorage
 	accountService   *AccountService
 }
 
@@ -54,7 +54,7 @@ func NewMessageService(
 	config MessageServiceConfig,
 ) (*MessageService, error) {
 	parser := mimeparser.NewMIMEParser(config.TempStoragePath)
-	storage := storage.NewAttachmentStorage(config.TempStoragePath)
+	storage := storage.NewFileAttachmentStorage(config.TempStoragePath)
 
 	// Initialize cache helpers
 	messageListCache := messagecache.NewMessageListCache(cache)
@@ -121,6 +121,10 @@ func (s *MessageService) GetMessageList(
 			cursorData = CursorData{Page: 0}
 		}
 	}
+
+	// Log cursor details for pagination debugging
+	log.Printf("[PAGINATION] GetMessageList: accountID=%s, folder=%s, cursor.page=%d, cursor.last_uid=%d, limit=%d, sortBy=%s, sortOrder=%s",
+		accountID, folder, cursorData.Page, cursorData.LastUID, limit, sortBy, sortOrder)
 
 	// Get account with decrypted credentials
 	account, err := s.accountService.GetAccountWithCredentials(ctx, accountID)
@@ -351,28 +355,39 @@ UseUIDs:
 		}(),
 	)
 
-	// Phase 3: Validate cursor anchor UID
-	// Check if the LastUID in cursor still exists (wasn't deleted)
-	// Calculate start index using LastUID for stable pagination
+	// Phase 3: Calculate start index for pagination
+	// Primary: Use page-based calculation for consistent pagination
+	// Secondary: Use LastUID only for stable pagination when messages are added/deleted
 	var startIndex int
-	if cursorData.LastUID > 0 && !validateCursorAnchor(cursorData, uids) {
-		log.Printf("Cursor anchor UID %d was deleted, adjusting cursor", cursorData.LastUID)
-		// Adjust start index to nearest surviving UID
-		startIndex = adjustCursorForDeletedAnchor(cursorData, uids, pageSize)
-		log.Printf("Adjusted startIndex to %d after anchor deletion", startIndex)
-	} else {
-		startIndex = cursorData.Page * pageSize
-		if cursorData.LastUID > 0 {
-			// Find the position of LastUID in the sorted UID list
-			for i, uid := range uids {
-				if uid == cursorData.LastUID {
-					startIndex = i + 1
-					log.Printf("Using LastUID %d for stable pagination, startIndex=%d", cursorData.LastUID, startIndex)
-					break
+
+	// Base calculation: page * pageSize
+	startIndex = cursorData.Page * pageSize
+
+	// If LastUID is provided, use it for stable pagination (only if it matches expected position)
+	// This handles cases where messages are added/removed between page loads
+	if cursorData.LastUID > 0 {
+		expectedLastUIDIndex := (cursorData.Page * pageSize) - 1
+		if expectedLastUIDIndex >= 0 && expectedLastUIDIndex < len(uids) {
+			// Check if the LastUID matches what we expect at the end of previous page
+			if uids[expectedLastUIDIndex] == cursorData.LastUID {
+				// LastUID matches expected position, use page-based startIndex
+				log.Printf("LastUID %d matches expected position %d, using page-based startIndex=%d",
+					cursorData.LastUID, expectedLastUIDIndex, startIndex)
+			} else {
+				// LastUID doesn't match - messages were added/removed
+				// Find actual position of LastUID and adjust
+				for i, uid := range uids {
+					if uid == cursorData.LastUID {
+						startIndex = i + 1
+						log.Printf("LastUID %d at position %d (expected %d), adjusted startIndex=%d",
+							cursorData.LastUID, i, expectedLastUIDIndex, startIndex)
+						break
+					}
 				}
 			}
 		}
 	}
+
 	endIndex := startIndex + pageSize
 
 	// Apply pagination to UIDs
@@ -650,9 +665,48 @@ func (s *MessageService) GetMessage(
 	parseResult.Message.ProcessingMetadata.ProcessingTime = time.Since(time.Now()).Milliseconds()
 	parseResult.Message.ProcessingMetadata.SizeOriginal = int64(len(rawData))
 
+	// Store ALL attachments from parse result BEFORE caching
+	// This ensures attachment IDs in the message match what's in storage
+	for i := range parseResult.Attachments {
+		att := &parseResult.Attachments[i]
+		if att.Data != nil {
+			id, err := s.storage.Store(accountID, folder, uid, att.Filename, att.Data)
+			if err != nil {
+				log.Printf("Warning: failed to store attachment %s: %v", att.Filename, err)
+				continue
+			}
+			att.ID = id
+
+			// Update corresponding message attachment
+			for j := range parseResult.Message.Attachments {
+				msgAtt := &parseResult.Message.Attachments[j]
+				if msgAtt.ID == id || msgAtt.Filename == att.Filename {
+					msgAtt.ID = id
+					break
+				}
+			}
+		}
+	}
+
 	// Cache the message with content-based deduplication
 	if err := s.setCachedMessageWithDedup(ctx, accountID, parseResult.Message); err != nil {
 		log.Printf("Warning: failed to cache message: %v", err)
+	}
+
+	// Generate signed URLs for attachments
+	for i := range parseResult.Message.Attachments {
+		att := &parseResult.Message.Attachments[i]
+		if att.AccessURL == "" {
+			baseURL := fmt.Sprintf("/v1/accounts/%s/messages/%s/attachments", accountID, uid)
+			signedURL, expiry := mimeparser.GenerateSignedURL(
+				att.ID,
+				baseURL,
+				"secret-key",
+				24*time.Hour,
+			)
+			att.AccessURL = signedURL
+			att.URLExpiry = &expiry
+		}
 	}
 
 	// Mark message as seen (optional)
@@ -841,27 +895,8 @@ func (s *MessageService) ParseMessage(
 		return nil, err
 	}
 
-	// Store large attachments
-	for i, att := range result.Attachments {
-		if int64(len(att.Data)) > config.MaxInlineSize {
-			// Store attachment
-			_, err := s.storage.Store(att.Data, att.Checksum)
-			if err != nil {
-				return nil, fmt.Errorf("failed to store attachment: %w", err)
-			}
-
-			// Generate signed URL
-			signedURL, expiry := mimeparser.GenerateSignedURL(
-				att.ID,
-				"/api/v1/attachments",
-				"secret-key",
-				24*time.Hour,
-			)
-
-			result.Message.Attachments[i].AccessURL = signedURL
-			result.Message.Attachments[i].URLExpiry = &expiry
-		}
-	}
+	// Store large attachments (note: attachment data is in memory at this point)
+	// Storage happens in GetMessage() where we have accountID, folder, uid context
 
 	// Set processing metadata
 	if result.Message.ProcessingMetadata == nil {
@@ -1537,8 +1572,7 @@ func (s *MessageService) ListFolders(
 	// Convert to models.FolderInfo with message counts
 	folders := make([]*models.FolderInfo, 0, len(imapFolders))
 	for _, f := range imapFolders {
-		// Get folder stats
-		_, err := client.SelectFolder(f.Name)
+		// Get folder stats by selecting the folder
 		folderInfo := &models.FolderInfo{
 			Name:        f.Name,
 			Delimiter:   f.Delimiter,
@@ -1550,8 +1584,21 @@ func (s *MessageService) ListFolders(
 			UIDValidity: f.UIDValidity,
 			LastSync:    time.Now(),
 		}
+
+		// Select folder to get accurate counts (Unseen, Messages, etc.)
+		selectedInfo, err := client.SelectFolder(f.Name)
+		if err == nil && selectedInfo != nil {
+			// Use the selected folder info for accurate counts
+			folderInfo.Messages = selectedInfo.Messages
+			folderInfo.Recent = selectedInfo.Recent
+			folderInfo.Unseen = selectedInfo.Unseen
+			folderInfo.UIDNext = selectedInfo.UIDNext
+			folderInfo.UIDValidity = selectedInfo.UIDValidity
+		} else {
+			log.Printf("Warning: failed to select folder %s: %v", f.Name, err)
+		}
+
 		folders = append(folders, folderInfo)
-		_ = err // Ignore select errors, continue with other folders
 	}
 
 	// Cache folder list

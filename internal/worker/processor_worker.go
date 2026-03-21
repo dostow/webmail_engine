@@ -25,7 +25,7 @@ type ProcessorWorker struct {
 	SessionPool       *pool.IMAPSessionPool
 	Cache             *cache.Cache
 	Scheduler         *scheduler.FairUseScheduler
-	AttachmentStorage *storage.AttachmentStorage
+	AttachmentStorage storage.AttachmentStorage
 	Processor         *service.EnvelopeProcessor
 	ownsResources     bool // Whether worker owns its resources (true = cleanup on Stop)
 }
@@ -36,7 +36,7 @@ type ProcessorWorkerOptions struct {
 	Store             store.AccountStore
 	SessionPool       *pool.IMAPSessionPool
 	Cache             *cache.Cache
-	AttachmentStorage *storage.AttachmentStorage
+	AttachmentStorage storage.AttachmentStorage
 }
 
 // NewProcessorWorker creates a new processor worker instance
@@ -97,11 +97,11 @@ func NewProcessorWorker(cfg *workerconfig.WorkerConfig, opts *ProcessorWorkerOpt
 	fairUseScheduler := scheduler.NewFairUseScheduler()
 
 	// Initialize attachment storage
-	var attachmentStorage *storage.AttachmentStorage
+	var attachmentStorage storage.AttachmentStorage
 	if opts.AttachmentStorage != nil {
 		attachmentStorage = opts.AttachmentStorage
 	} else {
-		attachmentStorage = storage.NewAttachmentStorage(cfg.ProcessorConfig.TempStoragePath)
+		attachmentStorage = storage.NewFileAttachmentStorage(cfg.ProcessorConfig.TempStoragePath)
 	}
 
 	// Create account service with encryption key
@@ -226,7 +226,7 @@ func cleanupResources(
 	store store.AccountStore,
 	sessionPool *pool.IMAPSessionPool,
 	cache *cache.Cache,
-	attachmentStorage *storage.AttachmentStorage,
+	attachmentStorage storage.AttachmentStorage,
 ) {
 	if queue != nil {
 		queue.Close()

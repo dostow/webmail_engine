@@ -99,7 +99,7 @@ func main() {
 	defer memCache.Close()
 
 	// Create shared attachment storage
-	attachmentStorage := storage.NewAttachmentStorage(*attachmentPath)
+	attachmentStorage := storage.NewFileAttachmentStorage(*attachmentPath)
 	defer attachmentStorage.Shutdown()
 
 	// Create sync worker with shared resources

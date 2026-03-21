@@ -1,14 +1,17 @@
 package api
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"webmail_engine/internal/cache"
 	"webmail_engine/internal/models"
 	"webmail_engine/internal/service"
+	"webmail_engine/internal/storage"
 	"webmail_engine/internal/store"
 
 	"github.com/gin-gonic/gin"
@@ -20,6 +23,8 @@ type APIHandler struct {
 	messageService *service.MessageService
 	sendService    *service.SendService
 	store          store.AccountStore
+	cache          *cache.Cache
+	storage        storage.AttachmentStorage
 }
 
 // accountStatusMiddleware checks if an account is disabled and returns an error if so
@@ -64,12 +69,16 @@ func NewAPIHandler(
 	messageService *service.MessageService,
 	sendService *service.SendService,
 	store store.AccountStore,
+	cache *cache.Cache,
+	storage storage.AttachmentStorage,
 ) *APIHandler {
 	return &APIHandler{
 		accountService: accountService,
 		messageService: messageService,
 		sendService:    sendService,
 		store:          store,
+		cache:          cache,
+		storage:        storage,
 	}
 }
 
@@ -99,6 +108,7 @@ func (h *APIHandler) RegisterRoutes(router *gin.Engine) {
 		accountRoutes.POST("/messages/mark-read", h.markMessagesRead)
 		accountRoutes.GET("/folders/live", h.listFolders)
 		accountRoutes.GET("/folders/tree", h.getFolderTree)
+		accountRoutes.GET("/messages/:uid/attachments/:attachmentId", h.downloadAttachment)
 	}
 
 	// Processor routes
@@ -717,6 +727,71 @@ func (h *APIHandler) markMessagesRead(c *gin.Context) {
 		"message": "Messages marked as read",
 		"count":   len(req.UIDs),
 	})
+}
+
+// downloadAttachment downloads an attachment file
+func (h *APIHandler) downloadAttachment(c *gin.Context) {
+	accountID := c.Param("id")
+	messageUID := c.Param("uid")
+	attachmentID := c.Param("attachmentId")
+	folder := c.Query("folder")
+
+	if accountID == "" {
+		respondError(c, models.NewValidationError("account_id", "Account ID is required"))
+		return
+	}
+	if messageUID == "" {
+		respondError(c, models.NewValidationError("uid", "Message UID is required"))
+		return
+	}
+	if attachmentID == "" {
+		respondError(c, models.NewValidationError("attachment_id", "Attachment ID is required"))
+		return
+	}
+
+	if folder == "" {
+		folder = "INBOX"
+	}
+
+	// Get message from cache to retrieve attachment metadata
+	msg, err := h.cache.GetMessage(c.Request.Context(), accountID, folder, messageUID)
+	if err != nil {
+		// Fallback: fetch from IMAP via message service
+		msg, err = h.messageService.GetMessage(c.Request.Context(), accountID, messageUID, folder)
+		if err != nil {
+			respondError(c, models.ErrAttachmentNotFound)
+			return
+		}
+	}
+
+	// Find attachment in message
+	var attachment *models.Attachment
+	for i := range msg.Attachments {
+		if msg.Attachments[i].ID == attachmentID {
+			attachment = &msg.Attachments[i]
+			break
+		}
+	}
+
+	if attachment == nil {
+		respondError(c, models.ErrAttachmentNotFound)
+		return
+	}
+
+	// Get the actual attachment data from storage
+	data, err := h.storage.Get(accountID, folder, messageUID, attachmentID)
+	if err != nil {
+		respondError(c, models.ErrAttachmentNotFound)
+		return
+	}
+
+	// Set headers for file download
+	c.Header("Content-Type", attachment.ContentType)
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", attachment.Filename))
+	c.Header("Content-Length", fmt.Sprintf("%d", len(data)))
+
+	// Send the file
+	c.Data(http.StatusOK, attachment.ContentType, data)
 }
 
 // splitStrings splits a string by separator, filtering out empty strings

@@ -72,7 +72,7 @@ export function useMessages() {
         const searchLower = filters.search.toLowerCase();
         const subjectMatch = message.subject?.toLowerCase().includes(searchLower);
         const fromMatch = message.from?.name?.toLowerCase().includes(searchLower) ||
-                         message.from?.address?.toLowerCase().includes(searchLower);
+          message.from?.address?.toLowerCase().includes(searchLower);
         if (!subjectMatch && !fromMatch) {
           return false;
         }
@@ -82,7 +82,7 @@ export function useMessages() {
       if (filters.from) {
         const fromLower = filters.from.toLowerCase();
         const fromMatch = message.from?.name?.toLowerCase().includes(fromLower) ||
-                         message.from?.address?.toLowerCase().includes(fromLower);
+          message.from?.address?.toLowerCase().includes(fromLower);
         if (!fromMatch) {
           return false;
         }
@@ -98,7 +98,7 @@ export function useMessages() {
 
       // Unread filter
       if (filters.unreadOnly) {
-        const isUnread = message.flags && !message.flags.includes('\\Seen');
+        const isUnread = message.flags && !message.flags.some(f => f.toLowerCase() === 'seen');
         if (!isUnread) {
           return false;
         }

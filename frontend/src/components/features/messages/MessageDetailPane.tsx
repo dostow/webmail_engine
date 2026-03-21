@@ -192,7 +192,7 @@ export function MessageDetailPane({ accountId, messageUid }: MessageDetailPanePr
   // Mark message as read when it's loaded and viewed
   useEffect(() => {
     if (detail && !markedAsRead) {
-      const isUnread = detail.flags && !detail.flags.includes('\\Seen');
+      const isUnread = detail.flags && !detail.flags.some(f => f.toLowerCase() === 'seen');
       if (isUnread) {
         api.markMessageRead(accountId, messageUid, folder).catch(() => {
           // Silently fail - marking as read is not critical
@@ -360,20 +360,24 @@ export function MessageDetailPane({ accountId, messageUid }: MessageDetailPanePr
           </p>
           <div className="flex flex-wrap gap-2">
             {detail.attachments.map((att, i) => (
-              <a
+              <button
                 key={i}
-                href={att.url || '#'}
-                download={att.url ? undefined : att.filename}
+                onClick={async (e) => {
+                  e.preventDefault();
+                  try {
+                    await api.downloadAttachment(accountId, messageUid, att.id, att.filename);
+                  } catch (err) {
+                    showError('Failed to download attachment');
+                  }
+                }}
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border bg-muted/40 text-xs cursor-pointer hover:bg-muted hover:border-primary transition-colors"
-                target={att.url ? '_blank' : undefined}
-                rel={att.url ? 'noopener noreferrer' : undefined}
               >
                 <svg className="h-3.5 w-3.5 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                 </svg>
                 <span className="font-medium truncate max-w-35">{att.filename}</span>
                 <span className="text-muted-foreground shrink-0">{(att.size / 1024).toFixed(1)} KB</span>
-              </a>
+              </button>
             ))}
           </div>
         </div>

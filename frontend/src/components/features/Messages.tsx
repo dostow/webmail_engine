@@ -33,6 +33,7 @@ export function MessagesView() {
   const { selectedAccountId, selectedMessageUid, paneMode, setAccount } = useTriageStore();
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedFolder = searchParams.get('folder') || 'INBOX';
+  const page = parseInt(searchParams.get('page') || '1', 10);
 
   // Effective account ID: prefer triage store value (user interacted), fallback to URL/loader
   const effectiveAccountId = selectedAccountId || loaderAccountId;
@@ -51,7 +52,13 @@ export function MessagesView() {
     }
   }, [effectiveAccountId]);
 
-  const page = parseInt(searchParams.get('page') || '1', 10);
+  // Sync page with message list store - trigger fetch when page changes
+  React.useEffect(() => {
+    if (messageListStore.accountId && messageListStore.currentPage !== page) {
+      messageListStore.setPage(page);
+    }
+  }, [page, messageListStore.accountId, messageListStore.currentPage]);
+
   const totalPages = Math.max(1, Math.ceil((messageListStore.total || loaderTotal) / MESSAGES_PER_PAGE));
 
   const handleAccountChange = (accountId: string) => {
@@ -83,9 +90,10 @@ export function MessagesView() {
   };
 
   // Use messages from message list store when available, otherwise use loader data
-  const displayMessages = messageListStore.accountId ? messageListStore.messages : loaderMessages;
-  const displayTotal = messageListStore.accountId ? messageListStore.total : loaderTotal;
-  const displayLoading = messageListStore.accountId ? messageListStore.loading : loading;
+  // The store is the single source of truth once the user interacts with the UI
+  const displayMessages = messageListStore.messages.length > 0 ? messageListStore.messages : loaderMessages;
+  const displayTotal = messageListStore.total > 0 ? messageListStore.total : loaderTotal;
+  const displayLoading = messageListStore.loading || (messageListStore.accountId && loading);
 
   return (
     <div className="w-full h-full flex flex-col min-h-0">

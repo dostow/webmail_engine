@@ -49,7 +49,7 @@ function getSenderName(message: Message): string {
 }
 
 function isUnread(message: Message) {
-  return message.flags && !message.flags.includes('\\Seen');
+  return message.flags && !message.flags.some(f => f.toLowerCase() === 'seen');
 }
 
 export function MessageList({
@@ -198,7 +198,14 @@ export function MessageList({
                 <TableHead className="w-[36px] px-1"></TableHead>
                 <TableHead className="w-[140px]">From</TableHead>
                 <TableHead>Subject</TableHead>
-                <TableHead className="w-[80px] text-right">Date</TableHead>
+                <TableHead className="w-[100px] text-right">
+                  <span className="flex items-center justify-end gap-1">
+                    Date
+                    <svg className="h-3 w-3 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                    </svg>
+                  </span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -240,6 +247,16 @@ export function MessageList({
                         <span className={cn("truncate text-xs", unread && "font-semibold")}>
                           {message.subject || '(No subject)'}
                         </span>
+                        {message.attachments && message.attachments.length > 0 && (
+                          <div className="flex items-center gap-1 mt-0.5">
+                            <svg className="h-3 w-3 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                            </svg>
+                            <span className="text-[10px] text-muted-foreground">
+                              {message.attachments.length} attachment{message.attachments.length > 1 ? 's' : ''}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell className="py-2 text-right text-[10px] text-muted-foreground whitespace-nowrap">

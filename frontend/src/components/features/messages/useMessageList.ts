@@ -44,8 +44,7 @@ function encodeCursor(page: number, lastUid?: number, sortBy: string = 'date', s
   const cursorData: Record<string, any> = {
     page: page - 1, // Backend uses 0-based page index
     sort_by: sortBy,
-    sort_order: sortOrder,
-    timestamp: new Date().toISOString()
+    sort_order: sortOrder
   };
   if (lastUid) {
     cursorData.last_uid = lastUid;
@@ -97,8 +96,10 @@ export const useMessageList = create<MessageListState>((set, get) => ({
 
     try {
       // Encode cursor with lastUid for stable pagination
-      // When moving forward, use the lastUid from the previous page
-      const cursor = encodeCursor(page, state.lastUid, 'date', 'desc');
+      // ONLY use lastUid if we are advancing exactly one page.
+      const isNextPage = page === state.currentPage + 1;
+      const anchorUid = isNextPage ? state.lastUid : undefined;
+      const cursor = encodeCursor(page, anchorUid, 'date', 'desc');
 
       const response = await api.getMessages(
         state.accountId!,
@@ -155,8 +156,9 @@ export const useMessageList = create<MessageListState>((set, get) => ({
 
     try {
       const page = state.currentPage;
-      // On refresh, use the stored lastUid if on a non-first page
-      const cursor = encodeCursor(page, state.lastUid, 'date', 'desc');
+      // On refresh, omit lastUid so we fetch the current page without 
+      // advancing the cursor to the next page
+      const cursor = encodeCursor(page, undefined, 'date', 'desc');
 
       const response = await api.getMessages(
         state.accountId,

@@ -179,7 +179,7 @@ func main() {
 		log.Fatalf("Failed to create message service: %v", err)
 	}
 
-	attachmentStorage := storage.NewAttachmentStorage(cfg.Storage.AttachmentPath)
+	attachmentStorage := storage.NewFileAttachmentStorage(cfg.Storage.AttachmentPath)
 
 	// Note: Sync and envelope processing run as separate workers:
 	// - cmd/sync_worker: Fetches envelopes from IMAP and enqueues for processing
@@ -218,7 +218,7 @@ func main() {
 	go webhookHandler.StartCleanup(webhookCtx, cfg.Webhook.CleanupInterval, cfg.Webhook.EventRetention)
 
 	// Initialize API handler
-	apiHandler := api.NewAPIHandler(accountService, messageService, sendService, accountStore)
+	apiHandler := api.NewAPIHandler(accountService, messageService, sendService, accountStore, memCache, attachmentStorage)
 
 	// Create Gin router
 	router := gin.New()

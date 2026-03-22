@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import * as api from '@/services/api';
-import type { Message } from '@/types';
+import type { Message, SearchQuery } from '@/types';
 
 export interface MessageListState {
   // Data
@@ -16,6 +16,13 @@ export interface MessageListState {
   nextCursor?: string;
   lastUid?: number; // Last UID from current page for stable pagination
 
+  // Search
+  isSearchMode: boolean;
+  searchQuery: string;
+  searchResults: Message[];
+  searchTotal: number;
+  searchLoading: boolean;
+
   // UI State
   loading: boolean;
   error: string | null;
@@ -29,6 +36,8 @@ export interface MessageListState {
   previousPage: () => Promise<void>;
   refresh: () => Promise<void>;
   clear: () => void;
+  setSearch: (query: string) => Promise<void>;
+  clearSearch: () => void;
 }
 
 const MESSAGES_PER_PAGE = 50;
@@ -77,13 +86,46 @@ export const useMessageList = create<MessageListState>((set, get) => ({
   error: null,
   accountId: null,
 
+  // Search initial state
+  isSearchMode: false,
+  searchQuery: '',
+  searchResults: [],
+  searchTotal: 0,
+  searchLoading: false,
+
   setAccount: async (accountId) => {
-    set({ accountId, messages: [], total: 0, loading: true, error: null, currentPage: 1, lastUid: undefined });
+    set({
+      accountId,
+      messages: [],
+      total: 0,
+      loading: true,
+      error: null,
+      currentPage: 1,
+      lastUid: undefined,
+      isSearchMode: false,
+      searchQuery: '',
+      searchResults: [],
+      searchTotal: 0,
+      searchLoading: false,
+    });
     await get().refresh();
   },
 
   setFolder: async (folder) => {
-    set({ folder, messages: [], total: 0, loading: true, error: null, currentPage: 1, lastUid: undefined });
+    set({
+      folder,
+      messages: [],
+      total: 0,
+      loading: true,
+      error: null,
+      currentPage: 1,
+      lastUid: undefined,
+      isSearchMode: false,
+      searchQuery: '',
+      searchResults: [],
+      searchTotal: 0,
+      searchLoading: false,
+    });
     await get().refresh();
   },
 
@@ -206,6 +248,55 @@ export const useMessageList = create<MessageListState>((set, get) => ({
       accountId: null,
       loading: false,
       error: null,
+      isSearchMode: false,
+      searchQuery: '',
+      searchResults: [],
+      searchTotal: 0,
+      searchLoading: false,
+    });
+  },
+
+  setSearch: async (query: string) => {
+    const state = get();
+    if (!state.accountId) return;
+
+    // Empty query → exit search mode and restore normal view
+    if (!query.trim()) {
+      get().clearSearch();
+      return;
+    }
+
+    set({ searchQuery: query, isSearchMode: true, searchLoading: true });
+
+    try {
+      const searchQuery: SearchQuery = {
+        account_id: state.accountId,
+        folder: state.folder || 'INBOX',
+        keywords: [query.trim()],
+        limit: 100,
+      };
+      const result = await api.searchMessages(searchQuery);
+      set({
+        searchResults: result.messages,
+        searchTotal: result.total_matches,
+        searchLoading: false,
+      });
+    } catch (err) {
+      set({
+        searchResults: [],
+        searchTotal: 0,
+        searchLoading: false,
+      });
+    }
+  },
+
+  clearSearch: () => {
+    set({
+      isSearchMode: false,
+      searchQuery: '',
+      searchResults: [],
+      searchTotal: 0,
+      searchLoading: false,
     });
   },
 }));

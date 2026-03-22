@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Avatar } from '@/components/ui/avatar';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
+import { useState, useEffect, useRef } from 'react';
 import {
   Table,
   TableBody,
@@ -20,6 +21,7 @@ import {
 import { cn } from '@/lib/utils';
 import { formatMessageDate } from '@/utils/format';
 import { useMessages } from '@/hooks/useMessages';
+import { useMessageList } from './useMessageList';
 import { useTriageStore } from './useTriageStore';
 import type { Account, Message } from '@/types';
 
@@ -65,10 +67,39 @@ export function MessageList({
   onRefresh,
 }: MessageListProps) {
   const { selectedAccountId, selectedMessageUid, selectMessage, openCompose } = useTriageStore();
-  const { filterMessages, filters, updateFilters, clearFilters } = useMessages();
+  const { filters, updateFilters, clearFilters, filterMessages } = useMessages();
+  const messageListStore = useMessageList();
 
-  const filteredMessages = filterMessages(messages, filters);
-  const hasActiveFilters = Object.values(filters).some((v) => v !== undefined && v !== false);
+  // Local search input state — debounced to avoid hammering the backend
+  const [searchInput, setSearchInput] = useState(messageListStore.searchQuery);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Keep local input in sync with store (e.g. when folder/account changes reset search)
+  useEffect(() => {
+    setSearchInput(messageListStore.searchQuery);
+  }, [messageListStore.searchQuery]);
+
+  // Debounce: fire backend search 300ms after the user stops typing
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      messageListStore.setSearch(searchInput);
+    }, 300);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [searchInput]);
+
+  // Decide which message list to display
+  const isSearchMode = messageListStore.isSearchMode;
+  const baseMessages = isSearchMode ? messageListStore.searchResults : messages;
+  const isLoading = isSearchMode ? messageListStore.searchLoading : loading;
+
+  // Apply local (client-side) post-filters on top of whichever list is shown
+  const filteredMessages = filterMessages(baseMessages, { ...filters, search: undefined });
+  const hasActiveFilters = isSearchMode
+    ? Object.values({ ...filters, search: undefined }).some((v) => v !== undefined && v !== false)
+    : Object.values(filters).some((v) => v !== undefined && v !== false);
 
   const handleRowClick = (message: Message) => {
     if (selectedAccountId) {
@@ -128,8 +159,8 @@ export function MessageList({
       <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b bg-background">
         <Input
           placeholder="Search…"
-          value={filters.search || ''}
-          onChange={(e) => updateFilters({ search: e.target.value })}
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
           className="h-7 text-xs flex-1"
         />
         <Button
@@ -148,20 +179,32 @@ export function MessageList({
         >
           📎
         </Button>
-        {hasActiveFilters && (
+        {(hasActiveFilters || searchInput) && (
           <Button
             variant="ghost"
             size="sm"
             className="h-7 text-xs px-2 shrink-0 text-muted-foreground"
-            onClick={clearFilters}
+            onClick={() => {
+              clearFilters();
+              setSearchInput('');
+              messageListStore.clearSearch();
+            }}
           >
             ✕
           </Button>
         )}
       </div>
 
-      {/* Filter summary */}
-      {hasActiveFilters && (
+      {/* Filter / search summary */}
+      {isSearchMode && (
+        <div className="shrink-0 px-3 py-1 text-[11px] text-muted-foreground bg-muted/10 border-b">
+          {messageListStore.searchLoading
+            ? 'Searching…'
+            : `${messageListStore.searchTotal} result${messageListStore.searchTotal !== 1 ? 's' : ''} for "${messageListStore.searchQuery}"`
+          }
+        </div>
+      )}
+      {!isSearchMode && hasActiveFilters && (
         <div className="shrink-0 px-3 py-1 text-[11px] text-muted-foreground bg-muted/10 border-b">
           {filteredMessages.length} of {messages.length} messages
         </div>
@@ -173,14 +216,19 @@ export function MessageList({
           <div className="text-4xl">📬</div>
           <p className="text-sm">Select an account to view messages</p>
         </div>
-      ) : loading && messages.length === 0 ? (
+      ) : isLoading && baseMessages.length === 0 ? (
         <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
           Loading…
         </div>
       ) : filteredMessages.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-2 text-muted-foreground">
           <div className="text-4xl">📭</div>
-          {hasActiveFilters ? (
+          {isSearchMode ? (
+            <div className="text-center">
+              <p className="text-sm">No messages found for "{messageListStore.searchQuery}"</p>
+              <Button variant="link" size="sm" onClick={() => { setSearchInput(''); messageListStore.clearSearch(); }}>Clear search</Button>
+            </div>
+          ) : hasActiveFilters ? (
             <div className="text-center">
               <p className="text-sm">No messages match your filters</p>
               <Button variant="link" size="sm" onClick={clearFilters}>Clear filters</Button>
@@ -271,23 +319,25 @@ export function MessageList({
         </ScrollArea>
       )}
 
-      {/* Pagination footer */}
-      <div className="shrink-0 flex items-center justify-between border-t px-3 py-1.5 bg-muted/10 text-[11px] text-muted-foreground">
-        <span>{total > 0 ? `${Math.min(page * MESSAGES_PER_PAGE, total)} / ${total}` : '—'}</span>
-        <div className="flex items-center gap-0.5">
-          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => onPageChange(page - 1)} disabled={page <= 1}>
-            <svg className="h-2.5 w-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
-            </svg>
-          </Button>
-          <span className="px-1">{page} / {totalPages}</span>
-          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => onPageChange(page + 1)} disabled={page >= totalPages}>
-            <svg className="h-2.5 w-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
-            </svg>
-          </Button>
+      {/* Pagination footer — hidden during search mode */}
+      {!isSearchMode && (
+        <div className="shrink-0 flex items-center justify-between border-t px-3 py-1.5 bg-muted/10 text-[11px] text-muted-foreground">
+          <span>{total > 0 ? `${Math.min(page * MESSAGES_PER_PAGE, total)} / ${total}` : '—'}</span>
+          <div className="flex items-center gap-0.5">
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => onPageChange(page - 1)} disabled={page <= 1}>
+              <svg className="h-2.5 w-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
+              </svg>
+            </Button>
+            <span className="px-1">{page} / {totalPages}</span>
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => onPageChange(page + 1)} disabled={page >= totalPages}>
+              <svg className="h-2.5 w-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+              </svg>
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

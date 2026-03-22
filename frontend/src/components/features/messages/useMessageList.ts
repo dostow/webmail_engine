@@ -148,11 +148,10 @@ export const useMessageList = create<MessageListState>((set, get) => ({
     set({ loading: true, error: null, currentPage: page });
 
     try {
-      // Encode cursor with lastUid for stable pagination
-      // ONLY use lastUid if we are advancing exactly one page.
-      const isNextPage = page === state.currentPage + 1;
-      const anchorUid = isNextPage ? state.lastUid : undefined;
-      const cursor = encodeCursor(page, anchorUid, 'date', 'desc');
+      // Encode cursor WITHOUT lastUid for consistent caching
+      // Using lastUid caused duplicate requests with different cache keys
+      // Page-based cursor is sufficient for most pagination scenarios
+      const cursor = encodeCursor(page, undefined, 'date', 'desc');
 
       const response = await api.getMessages(
         state.accountId!,
@@ -163,7 +162,7 @@ export const useMessageList = create<MessageListState>((set, get) => ({
         'desc'
       );
 
-      // Extract last UID for next pagination
+      // Extract last UID for next pagination (stored but not used in cursor)
       const newLastUid = getLastUidFromMessages(response.messages);
 
       // Use server's pagination values as source of truth
@@ -210,8 +209,7 @@ export const useMessageList = create<MessageListState>((set, get) => ({
 
     try {
       const page = state.currentPage;
-      // On refresh, omit lastUid so we fetch the current page without 
-      // advancing the cursor to the next page
+      // On refresh, omit lastUid to fetch the current page
       const cursor = encodeCursor(page, undefined, 'date', 'desc');
 
       const response = await api.getMessages(
@@ -226,12 +224,12 @@ export const useMessageList = create<MessageListState>((set, get) => ({
       // Extract last UID for next pagination
       const newLastUid = getLastUidFromMessages(response.messages);
 
-      // Use server's pagination values as source of truth
+      // Update messages but keep currentPage unchanged to maintain URL sync
+      // Only update fields that don't affect page synchronization
       set({
         messages: response.messages,
         total: response.total_count,
         pageSize: response.page_size,
-        currentPage: response.current_page,
         totalPages: response.total_pages,
         currentCursor: cursor,
         nextCursor: response.next_cursor,

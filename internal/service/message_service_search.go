@@ -87,8 +87,10 @@ func (s *MessageService) searchByDateRange(
 		// Fetch envelopes for sorting
 		envelopes, err := client.FetchMessages(uids, false)
 		if err != nil {
-			log.Printf("Failed to fetch envelopes for sorting: %v, returning unsorted UIDs", err)
-			return uids, nil
+			// Return an error so the caller falls back to Search("ALL") with alreadySorted=false.
+			// Returning unsorted UIDs here would cause GetMessageList to treat them as
+			// already-sorted (alreadySorted=true), silently serving ascending order for desc requests.
+			return nil, fmt.Errorf("failed to fetch envelopes for date-range sort: %w", err)
 		}
 
 		// Sort by date (or other field)

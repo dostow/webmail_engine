@@ -254,9 +254,13 @@ type UIDListWithMetadata struct {
 	HighestModSeq  uint64    `json:"highest_modseq"`
 	QResyncCapable bool      `json:"qresync_capable"`
 	CachedAt       time.Time `json:"cached_at"`
-	SortField      string    `json:"sort_field,omitempty"`      // NEW: Track sort field
-	SortOrder      string    `json:"sort_order,omitempty"`      // NEW: Track sort order
-	SearchCriteria string    `json:"search_criteria,omitempty"` // NEW: Track search criteria used
+	SortField      string    `json:"sort_field,omitempty"`      // Track sort field
+	SortOrder      string    `json:"sort_order,omitempty"`      // Track sort order
+	SearchCriteria string    `json:"search_criteria,omitempty"` // Track search criteria used
+	// AlreadySorted indicates whether UIDs are stored in the final display order
+	// (i.e., already reversed for descending sort). When true, the caller must NOT
+	// reverse the slice again; when false, the caller must reverse for desc order.
+	AlreadySorted  bool      `json:"already_sorted"`
 }
 
 // BuildUIDKey generates a cache key for a UID list
@@ -308,7 +312,9 @@ func (c *UIDListCache) Get(ctx context.Context, key string) (*UIDListWithMetadat
 	return &metadata, nil
 }
 
-// Set stores a UID list with metadata in cache
+// Set stores a UID list with metadata in cache.
+// alreadySorted must be true when uids are already in the final display order
+// (caller must not reverse again); false when uids are in raw ascending IMAP order.
 func (c *UIDListCache) Set(
 	ctx context.Context,
 	key string,
@@ -319,6 +325,7 @@ func (c *UIDListCache) Set(
 	sortField string,
 	sortOrder string,
 	searchCriteria string,
+	alreadySorted bool,
 ) error {
 	if c.cache == nil {
 		return nil
@@ -341,6 +348,7 @@ func (c *UIDListCache) Set(
 		SortField:      sortField,
 		SortOrder:      sortOrder,
 		SearchCriteria: searchCriteria,
+		AlreadySorted:  alreadySorted,
 	}
 
 	// Marshal first to validate data integrity
@@ -367,7 +375,7 @@ func (c *UIDListCache) Set(
 		return err
 	}
 
-	log.Printf("Cached UID list with metadata: key=%s, count=%d, modseq=%d, sort=%s %s", key, count, modSeq, sortField, sortOrder)
+	log.Printf("Cached UID list with metadata: key=%s, count=%d, modseq=%d, sort=%s %s, alreadySorted=%v", key, count, modSeq, sortField, sortOrder, alreadySorted)
 	return nil
 }
 

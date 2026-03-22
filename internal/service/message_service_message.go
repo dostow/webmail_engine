@@ -143,6 +143,12 @@ func (s *MessageService) GetMessageList(
 	// Get UIDs from cache or IMAP with intelligent invalidation
 	uidCacheKey := s.uidListCache.BuildKey(accountID, folder, uidValidity)
 	var allUIDs []uint32
+	// alreadySorted tracks whether allUIDs is in the correct final display order (strategy-sorted).
+	// true  → use as-is (server_sort or date_range already ordered the slice)
+	// false → reverse for descending sort (raw ascending IMAP order from SEARCH)
+	// Must be declared here (function scope) because it is set in the cache-hit path
+	// (via goto UseUIDs) and also in the live-fetch switch block below.
+	var alreadySorted bool
 
 	// Get current folder info for comparison
 	currentMessageCount := folderInfo.Messages
@@ -158,6 +164,10 @@ func (s *MessageService) GetMessageList(
 				log.Printf("UID cache HIT: %d UIDs for folder %s (modseq=%d, sort=%s %s)",
 					len(cachedMetadata.UIDs), folder, cachedMetadata.HighestModSeq, cachedMetadata.SortField, cachedMetadata.SortOrder)
 				allUIDs = cachedMetadata.UIDs
+				// Restore the alreadySorted flag that was saved when this cache entry was written.
+				// Without this, the post-processing block below would use the zero-value (false)
+				// and incorrectly reverse an already-sorted list from the date_range strategy.
+				alreadySorted = cachedMetadata.AlreadySorted
 				goto UseUIDs
 			}
 			log.Printf("UID cache INVALID, refreshing for folder %s", folder)
@@ -188,17 +198,23 @@ func (s *MessageService) GetMessageList(
 						return nil, err
 					}
 					sortStrategy = "fallback_search"
+					// fallback_search returns raw ascending UIDs — not pre-sorted
+					alreadySorted = false
 				} else {
 					log.Printf("SORT completed in %v: %d UIDs", sortDuration, len(allUIDs))
 					if sortDuration > 5*time.Second {
 						log.Printf("WARN: SORT took >5s, consider date-range filtering for this mailbox")
 					}
+					// Server SORT returns UIDs in the requested order — already sorted
+					alreadySorted = true
 				}
 			} else {
 				// Server doesn't support SORT
 				log.Printf("Server doesn't support SORT, using SEARCH")
 				allUIDs, err = client.Search("ALL")
 				sortStrategy = "search_no_sort_cap"
+				// Raw SEARCH returns ascending UIDs — not pre-sorted
+				alreadySorted = false
 			}
 
 		case currentMessageCount <= maxSortUIDs:
@@ -210,6 +226,11 @@ func (s *MessageService) GetMessageList(
 				log.Printf("Date-range search failed: %v, falling back to SEARCH", err)
 				allUIDs, err = client.Search("ALL")
 				sortStrategy = "fallback_search"
+				// fallback_search returns raw ascending UIDs — not pre-sorted
+				alreadySorted = false
+			} else {
+				// searchByDateRange fetches envelopes and sorts them — already in display order
+				alreadySorted = true
 			}
 
 		default:
@@ -222,6 +243,8 @@ func (s *MessageService) GetMessageList(
 				allUIDs = allUIDs[len(allUIDs)-maxSortUIDs:]
 				log.Printf("Limited to last %d UIDs", len(allUIDs))
 			}
+			// SEARCH returns ascending UIDs — not pre-sorted for display order
+			alreadySorted = false
 		}
 
 		if err != nil {
@@ -237,7 +260,7 @@ func (s *MessageService) GetMessageList(
 		}
 
 		// Cache the UID list with metadata (including empty slices)
-		if err := s.uidListCache.Set(ctx, uidCacheKey, allUIDs, len(allUIDs), currentModSeq, client.HasQResync(), string(sortBy), string(sortOrder), "ALL"); err != nil {
+		if err := s.uidListCache.Set(ctx, uidCacheKey, allUIDs, len(allUIDs), currentModSeq, client.HasQResync(), string(sortBy), string(sortOrder), "ALL", alreadySorted); err != nil {
 			log.Printf("Warning: failed to cache UID list: %v", err)
 		}
 
@@ -252,13 +275,15 @@ UseUIDs:
 
 	log.Printf("Found %d messages in folder %s, page=%d, limit=%d", totalCount, folder, cursorData.Page, limit)
 
-	// When using server-side SORT, UIDs are already sorted
-	// For client-side sorting or no SORT support, we need to reverse for descending order
+	// Apply final order to UIDs based on whether the strategy already produced a sorted list.
+	// We deliberately avoid using client.HasSort() here: that flag indicates server CAPABILITY,
+	// not which strategy actually ran. Using it caused incorrect reversal for the date_range
+	// and limited_search paths.
 	var uids []uint32
-	if client.HasSort() {
-		// Server already sorted, use as-is
+	if alreadySorted {
+		// UIDs are already in the correct display order (server_sort or date_range)
 		uids = allUIDs
-		log.Printf("Using server-sorted UIDs (first: %v, last: %v)",
+		log.Printf("UIDs already in display order (strategy produced sorted list): first=%v last=%v",
 			func() uint32 {
 				if len(uids) > 0 {
 					return uids[0]
@@ -273,12 +298,12 @@ UseUIDs:
 			}(),
 		)
 	} else if sortOrder == models.SortOrderDesc {
-		// Reverse for descending order (newest first)
+		// Raw ascending UIDs from SEARCH — reverse for newest-first
 		uids = make([]uint32, 0, len(allUIDs))
 		for i := len(allUIDs) - 1; i >= 0; i-- {
 			uids = append(uids, allUIDs[i])
 		}
-		log.Printf("Reversed UIDs for client-side descending sort")
+		log.Printf("Reversed UIDs for descending sort (strategy returned raw ascending order)")
 	} else {
 		uids = allUIDs
 	}

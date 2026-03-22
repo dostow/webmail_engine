@@ -34,12 +34,14 @@ type MessageService struct {
 	parser           *mimeparser.MIMEParser
 	storage          storage.AttachmentStorage
 	accountService   *AccountService
+	searchStrategy   SearchStrategy
 }
 
 // MessageServiceConfig holds service configuration
 type MessageServiceConfig struct {
 	TempStoragePath string
 	MaxInlineSize   int64
+	AllowBodySearch bool // Whether to allow BODY search (slow, performance impact)
 }
 
 // NewMessageService creates a new message service
@@ -57,6 +59,16 @@ func NewMessageService(
 	messageListCache := messagecache.NewMessageListCache(cache)
 	uidListCache := messagecache.NewUIDListCache(cache)
 
+	// Create search strategy based on config
+	var searchStrategy SearchStrategy
+	if config.AllowBodySearch {
+		// Use body search strategy when enabled
+		searchStrategy = NewBodySearchStrategy()
+	} else {
+		// Use default strategy (no body search) for performance
+		searchStrategy = NewDefaultSearchStrategy()
+	}
+
 	return &MessageService{
 		sessions:         sessions,
 		cache:            cache,
@@ -66,6 +78,7 @@ func NewMessageService(
 		accountService:   accountService,
 		parser:           parser,
 		storage:          storage,
+		searchStrategy:   searchStrategy,
 	}, nil
 }
 

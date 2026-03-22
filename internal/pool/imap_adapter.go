@@ -596,10 +596,12 @@ func (a *IMAPAdapter) Search(criteria string) ([]uint32, error) {
 		return nil, fmt.Errorf("invalid search criteria: %w", err)
 	}
 
-	// Use UID SEARCH with retry logic
+	// Use UID SEARCH with retry logic and timeout
 	searchData, err := withRetry(
 		func() (*imap.SearchData, error) {
-			return a.client.UIDSearch(&searchCriteria, nil).Wait()
+			// UIDSearch().Wait() can hang indefinitely on large mailboxes with BODY search
+			// Wrap in timeout to prevent hangs (30 second timeout for search operations)
+			return searchWithTimeout(a.client, &searchCriteria, 30*time.Second)
 		},
 		2, // maxRetries
 		"SEARCH",
@@ -617,6 +619,47 @@ func (a *IMAPAdapter) Search(criteria string) ([]uint32, error) {
 	}
 
 	return result, nil
+}
+
+// searchWithTimeout executes UIDSearch with a timeout to prevent hangs on large mailboxes
+func searchWithTimeout(client *imapclient.Client, criteria *imap.SearchCriteria, timeout time.Duration) (*imap.SearchData, error) {
+	done := make(chan struct{})
+	var searchData *imap.SearchData
+	var err error
+
+	go func() {
+		searchData, err = client.UIDSearch(criteria, nil).Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return searchData, err
+	case <-time.After(timeout):
+		// Note: The goroutine will continue running in the background until the server responds
+		// This is acceptable as the IMAP connection will be invalidated and reconnected
+		return nil, fmt.Errorf("search timeout after %v (large mailbox BODY search may take longer)", timeout)
+	}
+}
+
+// sortWithTimeout executes UIDSort with a timeout to prevent hangs on large mailboxes
+func sortWithTimeout(client *imapclient.Client, options *SortOptions, timeout time.Duration) ([]uint32, error) {
+	done := make(chan struct{})
+	var result []uint32
+	var err error
+
+	go func() {
+		result, err = client.UIDSort(options).Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return result, err
+	case <-time.After(timeout):
+		// Note: The goroutine will continue running in the background until the server responds
+		return nil, fmt.Errorf("sort timeout after %v (large mailbox SORT may take longer)", timeout)
+	}
 }
 
 // HasSortCapability checks if the server supports SORT extension (RFC 5256)
@@ -660,10 +703,11 @@ func (a *IMAPAdapter) SortMessages(sortBy models.SortField, sortOrder models.Sor
 		SortCriteria:   sortCriteria,
 	}
 
-	// Get sorted UIDs with retry logic
+	// Get sorted UIDs with retry logic and timeout
 	sortedUIDs, err := withRetry(
 		func() ([]uint32, error) {
-			return a.client.UIDSort(sortOptions).Wait()
+			// UIDSort().Wait() can hang on large mailboxes, wrap in timeout
+			return sortWithTimeout(a.client, sortOptions, 30*time.Second)
 		},
 		2, // maxRetries
 		"SORT",
@@ -809,8 +853,8 @@ func parseSearchCriteria(criteria string) (imap.SearchCriteria, error) {
 
 	var searchCriteria imap.SearchCriteria
 
-	// Parse criteria - simplified parser for common cases
-	parts := strings.Fields(criteria)
+	// Parse criteria - handle quoted strings properly
+	parts := tokenizeCriteria(criteria)
 	for i := 0; i < len(parts); i++ {
 		switch strings.ToUpper(parts[i]) {
 		case "UNSEEN":
@@ -822,7 +866,7 @@ func parseSearchCriteria(criteria string) (imap.SearchCriteria, error) {
 				i++
 				searchCriteria.Header = append(searchCriteria.Header, imap.SearchCriteriaHeaderField{
 					Key:   "From",
-					Value: parts[i],
+					Value: unquote(parts[i]),
 				})
 			}
 		case "TO":
@@ -830,7 +874,7 @@ func parseSearchCriteria(criteria string) (imap.SearchCriteria, error) {
 				i++
 				searchCriteria.Header = append(searchCriteria.Header, imap.SearchCriteriaHeaderField{
 					Key:   "To",
-					Value: parts[i],
+					Value: unquote(parts[i]),
 				})
 			}
 		case "SUBJECT":
@@ -838,25 +882,25 @@ func parseSearchCriteria(criteria string) (imap.SearchCriteria, error) {
 				i++
 				searchCriteria.Header = append(searchCriteria.Header, imap.SearchCriteriaHeaderField{
 					Key:   "Subject",
-					Value: parts[i],
+					Value: unquote(parts[i]),
 				})
 			}
 		case "BODY":
 			if i+1 < len(parts) {
 				i++
-				searchCriteria.Body = append(searchCriteria.Body, parts[i])
+				searchCriteria.Body = append(searchCriteria.Body, unquote(parts[i]))
 			}
 		case "SINCE":
 			if i+1 < len(parts) {
 				i++
-				if date, err := time.Parse("02-Jan-2006", parts[i]); err == nil {
+				if date, err := time.Parse("02-Jan-2006", unquote(parts[i])); err == nil {
 					searchCriteria.Since = date
 				}
 			}
 		case "BEFORE":
 			if i+1 < len(parts) {
 				i++
-				if date, err := time.Parse("02-Jan-2006", parts[i]); err == nil {
+				if date, err := time.Parse("02-Jan-2006", unquote(parts[i])); err == nil {
 					searchCriteria.Before = date
 				}
 			}
@@ -864,6 +908,43 @@ func parseSearchCriteria(criteria string) (imap.SearchCriteria, error) {
 	}
 
 	return searchCriteria, nil
+}
+
+// tokenizeCriteria splits criteria into tokens, respecting quoted strings
+func tokenizeCriteria(criteria string) []string {
+	var tokens []string
+	var current strings.Builder
+	inQuotes := false
+
+	for _, r := range criteria {
+		switch r {
+		case '"':
+			inQuotes = !inQuotes
+		case ' ':
+			if inQuotes {
+				current.WriteRune(r)
+			} else if current.Len() > 0 {
+				tokens = append(tokens, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteRune(r)
+		}
+	}
+
+	if current.Len() > 0 {
+		tokens = append(tokens, current.String())
+	}
+
+	return tokens
+}
+
+// unquote removes surrounding quotes from a string
+func unquote(s string) string {
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return s[1 : len(s)-1]
+	}
+	return s
 }
 
 // buildSortKey builds the sort key for IMAP SORT command

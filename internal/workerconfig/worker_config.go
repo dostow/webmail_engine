@@ -20,6 +20,7 @@ type WorkerConfig struct {
 	Logging         config.LoggingConfig             `json:"logging"`
 	ShutdownTimeout time.Duration                    `json:"shutdown_timeout"`
 	Security        config.SecurityConfig            `json:"security"`
+	IMAP            config.IMAPConfig                `json:"imap"`
 	ProcessorConfig *service.EnvelopeProcessorConfig `json:"processor_config,omitempty"`
 }
 

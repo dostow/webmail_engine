@@ -135,6 +135,7 @@ func NewProcessorWorker(cfg *workerconfig.WorkerConfig, opts *ProcessorWorkerOpt
 		service.MessageServiceConfig{
 			TempStoragePath: cfg.ProcessorConfig.TempStoragePath,
 			MaxInlineSize:   10 * 1024 * 1024, // 10MB
+			AllowBodySearch: cfg.IMAP.Search.AllowBodySearch,
 		},
 	)
 	if err != nil {

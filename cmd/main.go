@@ -173,6 +173,7 @@ func main() {
 		service.MessageServiceConfig{
 			TempStoragePath: cfg.Storage.AttachmentPath,
 			MaxInlineSize:   cfg.Security.MaxAttachmentSize,
+			AllowBodySearch: cfg.IMAP.Search.AllowBodySearch,
 		},
 	)
 	if err != nil {

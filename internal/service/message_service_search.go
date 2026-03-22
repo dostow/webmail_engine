@@ -11,53 +11,6 @@ import (
 	"webmail_engine/internal/scheduler"
 )
 
-// buildIMAPSearchQuery builds an IMAP search query from search criteria
-func (s *MessageService) buildIMAPSearchQuery(query models.SearchQuery) string {
-	var parts []string
-
-	// Add keyword search (BODY or TEXT)
-	if len(query.Keywords) > 0 && query.Keywords[0] != "" {
-		parts = append(parts, fmt.Sprintf(`BODY "%s"`, query.Keywords[0]))
-	}
-
-	// Add FROM search
-	if query.From != "" {
-		parts = append(parts, fmt.Sprintf(`FROM "%s"`, query.From))
-	}
-
-	// Add TO search
-	if query.To != "" {
-		parts = append(parts, fmt.Sprintf(`TO "%s"`, query.To))
-	}
-
-	// Add SUBJECT search
-	if query.Subject != "" {
-		parts = append(parts, fmt.Sprintf(`SUBJECT "%s"`, query.Subject))
-	}
-
-	// Add date range
-	if query.Since != nil {
-		parts = append(parts, fmt.Sprintf("SINCE %s", query.Since.Format("02-Jan-2006")))
-	}
-	if query.Before != nil {
-		parts = append(parts, fmt.Sprintf("BEFORE %s", query.Before.Format("02-Jan-2006")))
-	}
-
-	// Add UNSEEN flag
-	for _, flag := range query.HasFlags {
-		if flag == "seen" {
-			parts = append(parts, "UNSEEN")
-		}
-	}
-
-	// Default to ALL if no criteria
-	if len(parts) == 0 {
-		return "ALL"
-	}
-
-	return joinStrings(parts, " ")
-}
-
 // searchByDateRange performs date-filtered search for large mailboxes
 // Returns UIDs from recent messages only (configurable time window)
 func (s *MessageService) searchByDateRange(
@@ -161,12 +114,12 @@ func (s *MessageService) SearchMessages(
 		return nil, fmt.Errorf("failed to select folder: %w", err)
 	}
 
-	// Build IMAP search query
-	searchCriteria := s.buildIMAPSearchQuery(query)
+	// Build and execute search using the configured strategy
+	searchCriteria := s.searchStrategy.BuildSearchQuery(query)
 	log.Printf("Searching IMAP with criteria: %s", searchCriteria)
 
-	// Execute search
-	uids, err := client.Search(searchCriteria)
+	// Execute search using strategy
+	uids, err := s.searchStrategy.ExecuteSearch(imapCtx, client, searchCriteria)
 	if err != nil {
 		log.Printf("IMAP search failed: %v", err)
 		return nil, fmt.Errorf("search failed: %w", err)
@@ -183,7 +136,7 @@ func (s *MessageService) SearchMessages(
 	}
 
 	// Fetch message envelopes
-	var messages []models.MessageSummary
+	messages := []models.MessageSummary{} // Initialize as empty slice, not nil
 	if len(uids) > 0 {
 		envelopes, err := client.FetchMessages(uids, false)
 		if err != nil {

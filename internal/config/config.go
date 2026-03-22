@@ -90,6 +90,12 @@ type IMAPConfig struct {
 	ReadTimeout    time.Duration `json:"read_timeout"`
 	WriteTimeout   time.Duration `json:"write_timeout"`
 	CommandTimeout time.Duration `json:"command_timeout"` // Per-command timeout (SORT, SEARCH, FETCH)
+	Search         SearchConfig  `json:"search"`
+}
+
+// SearchConfig holds search-specific configuration
+type SearchConfig struct {
+	AllowBodySearch bool `json:"allow_body_search"` // If false, BODY searches are ignored for performance
 }
 
 // SchedulerConfig holds fair-use scheduler configuration
@@ -177,6 +183,9 @@ func DefaultConfig() *Config {
 			ReadTimeout:    3 * time.Second,
 			WriteTimeout:   3 * time.Second,
 			CommandTimeout: 8 * time.Second, // Per-command timeout for SORT/SEARCH
+			Search: SearchConfig{
+				AllowBodySearch: false, // Disabled by default for performance
+			},
 		},
 		Scheduler: SchedulerConfig{
 			Enabled:           true,

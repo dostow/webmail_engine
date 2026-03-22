@@ -324,31 +324,46 @@ func (m *SyncManager) incrementalSync(accountID string, client *pool.IMAPAdapter
 	return m.syncUIDRange(accountID, client, folderName, fromUID, toUID, status)
 }
 
-// initialSyncFolder performs initial synchronization using date-based search
-func (m *SyncManager) initialSyncFolder(accountID string, client *pool.IMAPAdapter, folderName string, status *pool.FolderStatus) (int, error) {
-	log.Printf("Initial sync for %s/%s", accountID, folderName)
+// initialSyncBatchLimit is the maximum number of messages fetched by initialSyncFolder.
+// Using FetchNewestUIDsBySequence keeps this O(1) on the server regardless of mailbox size.
+const initialSyncBatchLimit = 500
 
-	// Use historical scope from sync settings
+// initialSyncFolder performs initial synchronization for a folder.
+// Instead of SEARCH SINCE (which scans the full mailbox on the server), it uses
+// FetchNewestUIDsBySequence to retrieve only the last N UIDs by sequence number —
+// answered from the server index in milliseconds with no body scan.
+func (m *SyncManager) initialSyncFolder(accountID string, client *pool.IMAPAdapter, folderName string, status *pool.FolderStatus) (int, error) {
+	log.Printf("Initial sync for %s/%s (%d messages)", accountID, folderName, status.Messages)
+
+	if status.Messages == 0 {
+		return m.updateFolderSyncState(accountID, folderName, status, 0)
+	}
+
+	// Use historical scope from sync settings to cap how many messages we fetch.
+	// Derive an approximate message limit: assume ~30 msgs/day as a rough heuristic,
+	// but cap at initialSyncBatchLimit to avoid fetching tens of thousands of envelopes.
 	account, err := m.accountService.GetAccount(context.Background(), accountID)
 	if err != nil {
 		return 0, err
 	}
-
 	historicalDays := account.SyncSettings.HistoricalScope
 	if historicalDays <= 0 {
-		historicalDays = 30 // Default to 30 days
+		historicalDays = 30
+	}
+	limit := historicalDays * 30 // rough heuristic: 30 msgs/day
+	if limit > initialSyncBatchLimit {
+		limit = initialSyncBatchLimit
 	}
 
-	sinceDate := time.Now().AddDate(0, 0, -historicalDays)
-
-	// Search by date as fallback
-	uids, err := client.Search(fmt.Sprintf("SINCE %s", sinceDate.Format("02-Jan-2006")))
+	// FetchNewestUIDsBySequence: UID FETCH <start>:<end> (UID) — no mailbox scan.
+	// Returns UIDs in descending order (newest first).
+	uids, err := client.FetchNewestUIDsBySequence(int(status.Messages), limit)
 	if err != nil {
-		log.Printf("Date-based search failed for %s/%s: %v, falling back to UNSEEN", accountID, folderName, err)
-		// Fallback to UNSEEN search
+		log.Printf("FetchNewestUIDsBySequence failed for %s/%s: %v, falling back to UNSEEN search", accountID, folderName, err)
+		// Graceful fallback: fetch only UNSEEN messages (much smaller set than ALL)
 		uids, err = client.Search("UNSEEN")
 		if err != nil {
-			return 0, fmt.Errorf("search failed: %w", err)
+			return 0, fmt.Errorf("fallback UNSEEN search failed: %w", err)
 		}
 	}
 
@@ -356,30 +371,37 @@ func (m *SyncManager) initialSyncFolder(accountID string, client *pool.IMAPAdapt
 		return m.updateFolderSyncState(accountID, folderName, status, 0)
 	}
 
-	// Fetch messages and enqueue for processing
+	log.Printf("Initial sync fetching %d UIDs for %s/%s", len(uids), accountID, folderName)
+
+	// Fetch envelopes in batches and enqueue for processing
+	const batchSize = 50
 	count := 0
 	enqueued := 0
-	for _, uid := range uids {
-		envelopes, err := client.FetchMessages([]uint32{uid}, false)
+
+	for i := 0; i < len(uids); i += batchSize {
+		end := i + batchSize
+		if end > len(uids) {
+			end = len(uids)
+		}
+		batch := uids[i:end]
+
+		envelopes, err := client.FetchMessages(batch, false)
 		if err != nil {
-			log.Printf("Failed to fetch message %d in %s/%s: %v", uid, accountID, folderName, err)
+			log.Printf("Failed to fetch envelope batch %d-%d in %s/%s: %v", batch[0], batch[len(batch)-1], accountID, folderName, err)
 			continue
 		}
 
-		if len(envelopes) > 0 {
-			count++
-			// Enqueue for async processing
-			for _, env := range envelopes {
-				if err := m.enqueueEnvelope(accountID, folderName, &env); err != nil {
-					log.Printf("Failed to enqueue envelope %s in %s/%s: %v", env.MessageID, accountID, folderName, err)
-					continue
-				}
-				enqueued++
+		count += len(envelopes)
+		for _, env := range envelopes {
+			if err := m.enqueueEnvelope(accountID, folderName, &env); err != nil {
+				log.Printf("Failed to enqueue envelope %s in %s/%s: %v", env.MessageID, accountID, folderName, err)
+				continue
 			}
+			enqueued++
 		}
 	}
 
-	log.Printf("Initial sync completed for %s/%s: %d messages, %d enqueued for processing",
+	log.Printf("Initial sync completed for %s/%s: %d messages fetched, %d enqueued for processing",
 		accountID, folderName, count, enqueued)
 
 	return m.updateFolderSyncState(accountID, folderName, status, count)

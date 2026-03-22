@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 
+	"webmail_engine/internal/config"
 	"webmail_engine/internal/envelopequeue"
 	"webmail_engine/internal/store"
 	"webmail_engine/internal/workerconfig"
@@ -26,16 +27,13 @@ func createQueue(cfg *workerconfig.WorkerConfig) (envelopequeue.EnvelopeQueue, e
 // createStore creates the account store based on configuration
 func createStore(cfg *workerconfig.WorkerConfig) (store.AccountStore, error) {
 	switch cfg.Store.Type {
-	case "sqlite", "":
-		log.Printf("Using SQLite store at %s", cfg.Store.SQLite.Path)
-		return store.NewSQLiteStore(store.SQLiteConfig{
-			Path:           cfg.Store.SQLite.Path,
-			MaxConnections: cfg.Store.SQLite.MaxConnections,
-			BusyTimeoutMs:  cfg.Store.SQLite.BusyTimeoutMs,
+	case "sqlite", "postgres", "":
+		log.Printf("Using SQLite store at %s", cfg.Store.SQL.DSN)
+		return store.NewSQLStore(config.SQLConfig{
+			DSN:            cfg.Store.SQL.DSN,
+			MaxConnections: cfg.Store.SQL.MaxConnections,
+			BusyTimeoutMs:  cfg.Store.SQL.BusyTimeoutMs,
 		})
-	case "postgres":
-		log.Printf("Using PostgreSQL store at %s:%d/%s", cfg.Store.Postgres.Host, cfg.Store.Postgres.Port, cfg.Store.Postgres.Database)
-		return nil, fmt.Errorf("PostgreSQL store not yet implemented - use sqlite or memory")
 	case "memory":
 		log.Println("Using in-memory store (data will not persist)")
 		return store.NewMemoryStore(), nil

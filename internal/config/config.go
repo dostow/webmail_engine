@@ -24,29 +24,17 @@ type Config struct {
 
 // StoreConfig holds account persistence store configuration
 type StoreConfig struct {
-	Type     string          `json:"type"` // "memory", "sqlite", "postgres"
-	SQLite   *SQLiteConfig   `json:"sqlite,omitempty"`
-	Postgres *PostgresConfig `json:"postgres,omitempty"`
+	Type     string          `json:"type"` // "memory", "sql"
+	SQL      *SQLConfig      `json:"sql,omitempty"`
 }
 
-// SQLiteConfig holds SQLite configuration
-type SQLiteConfig struct {
-	Path           string `json:"path"`
-	MaxConnections int    `json:"max_connections"`
-	BusyTimeoutMs  int    `json:"busy_timeout_ms"`
-}
-
-// PostgresConfig holds PostgreSQL configuration
-type PostgresConfig struct {
-	Host           string `json:"host"`
-	Port           int    `json:"port"`
-	Database       string `json:"database"`
-	User           string `json:"user"`
-	Password       string `json:"password"`
-	SSLMode        string `json:"ssl_mode"` // "disable", "require", "verify-full"
+// SQLConfig holds generalized SQL database configuration
+type SQLConfig struct {
+	Driver         string `json:"driver"` // "sqlite", "postgres"
+	DSN            string `json:"dsn"`
 	MaxConnections int    `json:"max_connections"`
 	MinIdle        int    `json:"min_idle"`
-	ConnTimeoutMs  int    `json:"conn_timeout_ms"`
+	BusyTimeoutMs  int    `json:"busy_timeout_ms"` // specific to sqlite
 }
 
 // ServerConfig holds HTTP server configuration
@@ -237,9 +225,11 @@ func DefaultConfig() *Config {
 		},
 		Store: StoreConfig{
 			Type: "memory", // Default to in-memory store
-			SQLite: &SQLiteConfig{
-				Path:           "./data/accounts.db",
+			SQL: &SQLConfig{
+				Driver:         "sqlite",
+				DSN:            "./data/accounts.db",
 				MaxConnections: 10,
+				MinIdle:        2,
 				BusyTimeoutMs:  5000,
 			},
 		},

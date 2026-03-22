@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"webmail_engine/internal/cache"
+	"webmail_engine/internal/config"
 	"webmail_engine/internal/configutil"
 	"webmail_engine/internal/envelopequeue"
 	"webmail_engine/internal/pool"
@@ -23,7 +25,9 @@ import (
 func main() {
 	// Parse command line flags
 	configPath := flag.String("config", "", "Path to configuration file")
-	dbPath := flag.String("db", "data/accounts.db", "SQLite database path")
+	storeType := flag.String("store", "sql", "Store type: sql, memory")
+	storeDriver := flag.String("store-driver", "sqlite", "SQL driver: sqlite, postgres")
+	storeDSN := flag.String("store-dsn", "./data/accounts.db", "SQL DSN (e.g., ./data/accounts.db for sqlite)")
 	concurrency := flag.Int("concurrency", 4, "Number of processor workers")
 	syncInterval := flag.Int("sync-interval", 60, "Sync interval in seconds")
 	attachmentPath := flag.String("attachments", "data/attachments", "Attachment storage path")
@@ -52,8 +56,11 @@ func main() {
 			log.Fatal("Encryption key is required. Generate one with: openssl rand -base64 32")
 		}
 		cfg = workerconfig.DefaultWorkerConfig("memory-worker")
-		cfg.Store.Type = "sqlite"
-		cfg.Store.SQLite.Path = *dbPath
+		cfg.Store.Type = *storeType
+		cfg.Store.SQL = &config.SQLConfig{
+			Driver: *storeDriver,
+			DSN:    *storeDSN,
+		}
 		cfg.Queue.Type = "memory"
 		cfg.Security.EncryptionKey = *encryptionKey
 		cfg.ProcessorConfig = &service.EnvelopeProcessorConfig{
@@ -76,7 +83,7 @@ func main() {
 	cfg.ProcessorConfig.TempStoragePath = *attachmentPath
 
 	log.Printf("Starting memory worker (sync + processor in single process)")
-	log.Printf("Database: %s", cfg.Store.SQLite.Path)
+	log.Printf("Database: %s", cfg.Store.SQL.DSN)
 	log.Printf("Processor concurrency: %d", cfg.ProcessorConfig.Concurrency)
 	log.Printf("Sync interval: %d seconds", *syncInterval)
 
@@ -166,17 +173,22 @@ func main() {
 // createStore creates the account store based on configuration
 func createStore(cfg *workerconfig.WorkerConfig) (store.AccountStore, error) {
 	switch cfg.Store.Type {
-	case "sqlite", "":
-		log.Printf("Using SQLite store at %s", cfg.Store.SQLite.Path)
-		return store.NewSQLiteStore(store.SQLiteConfig{
-			Path:           cfg.Store.SQLite.Path,
-			MaxConnections: cfg.Store.SQLite.MaxConnections,
-			BusyTimeoutMs:  cfg.Store.SQLite.BusyTimeoutMs,
+	case "sql":
+		if cfg.Store.SQL == nil {
+			cfg.Store.SQL = &config.SQLConfig{Driver: "sqlite", DSN: "./data/accounts.db", MaxConnections: 10}
+		}
+		log.Printf("Using SQL store with driver=%s, dsn=%s", cfg.Store.SQL.Driver, cfg.Store.SQL.DSN)
+		return store.NewSQLStore(config.SQLConfig{
+			Driver:         cfg.Store.SQL.Driver,
+			DSN:            cfg.Store.SQL.DSN,
+			MaxConnections: cfg.Store.SQL.MaxConnections,
+			MinIdle:        cfg.Store.SQL.MinIdle,
+			BusyTimeoutMs:  cfg.Store.SQL.BusyTimeoutMs,
 		})
 	case "memory":
 		log.Println("Using in-memory store (data will not persist)")
 		return store.NewMemoryStore(), nil
 	default:
-		return nil, nil
+		return nil, fmt.Errorf("unknown store type: %s", cfg.Store.Type)
 	}
 }

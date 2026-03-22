@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 
+	"webmail_engine/internal/config"
 	"webmail_engine/internal/worker"
 	"webmail_engine/internal/workerconfig"
 )
@@ -13,13 +14,9 @@ func main() {
 	configPath := flag.String("config", "", "Path to configuration file")
 	queueType := flag.String("queue", "memory", "Queue type: memory, redis")
 	redisURL := flag.String("redis", "redis://localhost:6379", "Redis URL (if queue=redis)")
-	storeType := flag.String("store", "sqlite", "Store type: sqlite, postgres, memory")
-	dbPath := flag.String("db", "data/webmail.db", "SQLite database path")
-	postgresHost := flag.String("postgres-host", "localhost", "PostgreSQL host")
-	postgresPort := flag.Int("postgres-port", 5432, "PostgreSQL port")
-	postgresDB := flag.String("postgres-db", "webmail", "PostgreSQL database")
-	postgresUser := flag.String("postgres-user", "postgres", "PostgreSQL user")
-	postgresPassword := flag.String("postgres-password", "", "PostgreSQL password")
+	storeType := flag.String("store", "sql", "Store type: sql, memory")
+	storeDriver := flag.String("store-driver", "sqlite", "SQL driver: sqlite, postgres")
+	storeDSN := flag.String("store-dsn", "./data/webmail.db", "SQL DSN (e.g., ./data/webmail.db for sqlite or postgres://...)")
 	flag.Parse()
 
 	// Load or create configuration
@@ -36,12 +33,10 @@ func main() {
 		cfg.Queue.Type = *queueType
 		cfg.Queue.RedisURL = *redisURL
 		cfg.Store.Type = *storeType
-		cfg.Store.SQLite.Path = *dbPath
-		cfg.Store.Postgres.Host = *postgresHost
-		cfg.Store.Postgres.Port = *postgresPort
-		cfg.Store.Postgres.Database = *postgresDB
-		cfg.Store.Postgres.User = *postgresUser
-		cfg.Store.Postgres.Password = *postgresPassword
+		cfg.Store.SQL = &config.SQLConfig{
+			Driver: *storeDriver,
+			DSN:    *storeDSN,
+		}
 	}
 
 	// Create and run sync worker

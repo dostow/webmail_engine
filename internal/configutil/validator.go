@@ -165,37 +165,17 @@ func (v *Validator) validateSecurityConfig(cfg *config.SecurityConfig) {
 
 func (v *Validator) validateStoreConfig(cfg *config.StoreConfig) {
 	switch cfg.Type {
-	case "sqlite", "":
-		if cfg.SQLite == nil {
+	case "sqlite", "postgres", "":
+		if cfg.SQL == nil {
 			v.errors = append(v.errors, ValidationError{
 				Field:   "store.sqlite",
 				Message: "SQLite config is required when store type is sqlite",
 			})
-		} else if cfg.SQLite.Path == "" {
+		} else if cfg.SQL.DSN == "" {
 			v.errors = append(v.errors, ValidationError{
 				Field:   "store.sqlite.path",
 				Message: "SQLite path is required",
 			})
-		}
-	case "postgres":
-		if cfg.Postgres == nil {
-			v.errors = append(v.errors, ValidationError{
-				Field:   "store.postgres",
-				Message: "Postgres config is required when store type is postgres",
-			})
-		} else {
-			if cfg.Postgres.Host == "" {
-				v.errors = append(v.errors, ValidationError{
-					Field:   "store.postgres.host",
-					Message: "Postgres host is required",
-				})
-			}
-			if cfg.Postgres.Database == "" {
-				v.errors = append(v.errors, ValidationError{
-					Field:   "store.postgres.database",
-					Message: "Postgres database is required",
-				})
-			}
 		}
 	case "memory":
 		// Memory store is valid, no additional checks needed
@@ -209,24 +189,11 @@ func (v *Validator) validateStoreConfig(cfg *config.StoreConfig) {
 
 func (v *Validator) validateWorkerStoreConfig(cfg *config.StoreConfig) {
 	switch cfg.Type {
-	case "sqlite", "":
-		if cfg.SQLite.Path == "" {
+	case "sqlite", "postgres", "":
+		if cfg.SQL.DSN == "" {
 			v.errors = append(v.errors, ValidationError{
-				Field:   "store.sqlite.path",
-				Message: "SQLite path is required",
-			})
-		}
-	case "postgres":
-		if cfg.Postgres.Host == "" {
-			v.errors = append(v.errors, ValidationError{
-				Field:   "store.postgres.host",
-				Message: "Postgres host is required",
-			})
-		}
-		if cfg.Postgres.Database == "" {
-			v.errors = append(v.errors, ValidationError{
-				Field:   "store.postgres.database",
-				Message: "Postgres database is required",
+				Field:   "store.sql.dsn",
+				Message: "SQL DSN is required",
 			})
 		}
 	case "memory":

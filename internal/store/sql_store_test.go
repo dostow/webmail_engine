@@ -6,15 +6,16 @@ import (
 	"testing"
 	"time"
 
+	"webmail_engine/internal/config"
 	"webmail_engine/internal/models"
 )
 
-// TestSQLiteStore_CreateAndGet tests basic create and get operations
-func TestSQLiteStore_CreateAndGet(t *testing.T) {
+// TestSQLStore_CreateAndGet tests basic create and get operations
+func TestSQLStore_CreateAndGet(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	store, err := NewSQLiteStore(SQLiteConfig{Path: dbPath})
+	store, err := NewSQLStore(config.SQLConfig{Driver: "sqlite", DSN: dbPath})
 	if err != nil {
 		t.Fatalf("Failed to create SQLite store: %v", err)
 	}
@@ -72,12 +73,12 @@ func TestSQLiteStore_CreateAndGet(t *testing.T) {
 	}
 }
 
-// TestSQLiteStore_DuplicateEmail tests duplicate email detection
-func TestSQLiteStore_DuplicateEmail(t *testing.T) {
+// TestSQLStore_DuplicateEmail tests duplicate email detection
+func TestSQLStore_DuplicateEmail(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	store, err := NewSQLiteStore(SQLiteConfig{Path: dbPath})
+	store, err := NewSQLStore(config.SQLConfig{Driver: "sqlite", DSN: dbPath})
 	if err != nil {
 		t.Fatalf("Failed to create SQLite store: %v", err)
 	}
@@ -143,12 +144,12 @@ func TestSQLiteStore_DuplicateEmail(t *testing.T) {
 	}
 }
 
-// TestSQLiteStore_Update tests account update
-func TestSQLiteStore_Update(t *testing.T) {
+// TestSQLStore_Update tests account update
+func TestSQLStore_Update(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	store, err := NewSQLiteStore(SQLiteConfig{Path: dbPath})
+	store, err := NewSQLStore(config.SQLConfig{Driver: "sqlite", DSN: dbPath})
 	if err != nil {
 		t.Fatalf("Failed to create SQLite store: %v", err)
 	}
@@ -202,12 +203,12 @@ func TestSQLiteStore_Update(t *testing.T) {
 	}
 }
 
-// TestSQLiteStore_Delete tests account deletion
-func TestSQLiteStore_Delete(t *testing.T) {
+// TestSQLStore_Delete tests account deletion
+func TestSQLStore_Delete(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	store, err := NewSQLiteStore(SQLiteConfig{Path: dbPath})
+	store, err := NewSQLStore(config.SQLConfig{Driver: "sqlite", DSN: dbPath})
 	if err != nil {
 		t.Fatalf("Failed to create SQLite store: %v", err)
 	}
@@ -255,12 +256,12 @@ func TestSQLiteStore_Delete(t *testing.T) {
 	}
 }
 
-// TestSQLiteStore_List tests listing with pagination
-func TestSQLiteStore_List(t *testing.T) {
+// TestSQLStore_List tests listing with pagination
+func TestSQLStore_List(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	store, err := NewSQLiteStore(SQLiteConfig{Path: dbPath})
+	store, err := NewSQLStore(config.SQLConfig{Driver: "sqlite", DSN: dbPath})
 	if err != nil {
 		t.Fatalf("Failed to create SQLite store: %v", err)
 	}
@@ -327,8 +328,8 @@ func TestSQLiteStore_List(t *testing.T) {
 	}
 }
 
-// TestSQLiteStore_Persistence tests that data persists after reopening
-func TestSQLiteStore_Persistence(t *testing.T) {
+// TestSQLStore_Persistence tests that data persists after reopening
+func TestSQLStore_Persistence(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
@@ -358,7 +359,7 @@ func TestSQLiteStore_Persistence(t *testing.T) {
 	}
 
 	// Create store and account
-	store1, err := NewSQLiteStore(SQLiteConfig{Path: dbPath})
+	store1, err := NewSQLStore(config.SQLConfig{Driver: "sqlite", DSN: dbPath})
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}
@@ -372,7 +373,7 @@ func TestSQLiteStore_Persistence(t *testing.T) {
 	store1.Close()
 
 	// Reopen store
-	store2, err := NewSQLiteStore(SQLiteConfig{Path: dbPath})
+	store2, err := NewSQLStore(config.SQLConfig{Driver: "sqlite", DSN: dbPath})
 	if err != nil {
 		t.Fatalf("Failed to reopen store: %v", err)
 	}
@@ -389,12 +390,12 @@ func TestSQLiteStore_Persistence(t *testing.T) {
 	}
 }
 
-// TestSQLiteStore_Health tests health check
-func TestSQLiteStore_Health(t *testing.T) {
+// TestSQLStore_Health tests health check
+func TestSQLStore_Health(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	store, err := NewSQLiteStore(SQLiteConfig{Path: dbPath})
+	store, err := NewSQLStore(config.SQLConfig{Driver: "sqlite", DSN: dbPath})
 	if err != nil {
 		t.Fatalf("Failed to create SQLite store: %v", err)
 	}
@@ -417,12 +418,12 @@ func TestSQLiteStore_Health(t *testing.T) {
 	}
 }
 
-// TestSQLiteStore_NotFound tests not found errors
-func TestSQLiteStore_NotFound(t *testing.T) {
+// TestSQLStore_NotFound tests not found errors
+func TestSQLStore_NotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	store, err := NewSQLiteStore(SQLiteConfig{Path: dbPath})
+	store, err := NewSQLStore(config.SQLConfig{Driver: "sqlite", DSN: dbPath})
 	if err != nil {
 		t.Fatalf("Failed to create SQLite store: %v", err)
 	}
@@ -478,12 +479,12 @@ func TestSQLiteStore_NotFound(t *testing.T) {
 	}
 }
 
-// TestSQLiteStore_JSONFields tests JSON field serialization
-func TestSQLiteStore_JSONFields(t *testing.T) {
+// TestSQLStore_JSONFields tests JSON field serialization
+func TestSQLStore_JSONFields(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	store, err := NewSQLiteStore(SQLiteConfig{Path: dbPath})
+	store, err := NewSQLStore(config.SQLConfig{Driver: "sqlite", DSN: dbPath})
 	if err != nil {
 		t.Fatalf("Failed to create SQLite store: %v", err)
 	}

@@ -29,15 +29,14 @@ func main() {
 
 	var accountStore store.AccountStore
 	switch cfg.Store.Type {
-	case "sqlite", "":
-		sqliteConfig := store.SQLiteConfig{
-			Path:           cfg.Store.SQLite.Path,
-			MaxConnections: cfg.Store.SQLite.MaxConnections,
-			BusyTimeoutMs:  cfg.Store.SQLite.BusyTimeoutMs,
+	case "sql":
+		if cfg.Store.SQL == nil {
+			cfg.Store.SQL = &config.SQLConfig{Driver: "sqlite", DSN: "./data/accounts.db", MaxConnections: 10}
 		}
-		accountStore, err = store.NewSQLiteStore(sqliteConfig)
+		log.Printf("Using SQL store with driver=%s, dsn=%s", cfg.Store.SQL.Driver, cfg.Store.SQL.DSN)
+		accountStore, err = store.NewSQLStore(*cfg.Store.SQL)
 		if err != nil {
-			log.Fatalf("Failed to initialize SQLite store: %v", err)
+			log.Fatalf("Failed to initialize SQL store: %v", err)
 		}
 	case "memory":
 		accountStore = store.NewMemoryStore()

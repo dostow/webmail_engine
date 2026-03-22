@@ -100,16 +100,16 @@ func main() {
 	log.Printf("Initializing account store (type=%s)...", cfg.Store.Type)
 	var accountStore store.AccountStore
 	switch cfg.Store.Type {
-	case "sqlite", "":
-		accountStore, err = store.NewSQLiteStore(store.SQLiteConfig{
-			Path:           cfg.Store.SQLite.Path,
-			MaxConnections: cfg.Store.SQLite.MaxConnections,
-			BusyTimeoutMs:  cfg.Store.SQLite.BusyTimeoutMs,
-		})
+	case "sql":
+		if cfg.Store.SQL == nil {
+			// fallback using memory or defaults
+			cfg.Store.SQL = &config.SQLConfig{Driver: "sqlite", DSN: "./data/accounts.db", MaxConnections: 10}
+		}
+		log.Printf("Using SQL store with driver=%s, dsn=%s", cfg.Store.SQL.Driver, cfg.Store.SQL.DSN)
+		accountStore, err = store.NewSQLStore(*cfg.Store.SQL)
 	case "memory":
 		accountStore = store.NewMemoryStore()
 		log.Println("Memory store initialized (data will not persist)")
-
 	default:
 		log.Fatalf("Unknown store type: %s", cfg.Store.Type)
 	}

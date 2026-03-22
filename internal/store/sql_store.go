@@ -10,9 +10,11 @@ import (
 	"sync"
 	"time"
 
+	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
+	"webmail_engine/internal/config"
 	"webmail_engine/internal/models"
 )
 
@@ -229,18 +231,18 @@ func (a *accountDB) fromAccount(acc *models.Account) error {
 	return nil
 }
 
-// SQLiteStore implements AccountStore using SQLite database with GORM
-type SQLiteStore struct {
+// SQLStore implements AccountStore using SQLite database with GORM
+type SQLStore struct {
 	db     *gorm.DB
 	mu     sync.RWMutex
 	closed bool
 
 	// Statistics
-	stats SQLiteStoreStats
+	stats SQLStoreStats
 }
 
-// SQLiteStoreStats tracks store statistics
-type SQLiteStoreStats struct {
+// SQLStoreStats tracks store statistics
+type SQLStoreStats struct {
 	Creates int64 `json:"creates"`
 	Updates int64 `json:"updates"`
 	Deletes int64 `json:"deletes"`
@@ -249,38 +251,32 @@ type SQLiteStoreStats struct {
 	mu      sync.RWMutex
 }
 
-// SQLiteConfig holds SQLite configuration
-type SQLiteConfig struct {
-	Path           string `json:"path"`
-	MaxConnections int    `json:"max_connections"`
-	BusyTimeoutMs  int    `json:"busy_timeout_ms"`
-}
+// NewSQLStore creates a new SQL store using GORM
+func NewSQLStore(cfg config.SQLConfig) (*SQLStore, error) {
+	var db *gorm.DB
+	var err error
 
-// DefaultSQLiteConfig returns default SQLite configuration
-func DefaultSQLiteConfig() SQLiteConfig {
-	return SQLiteConfig{
-		Path:           "./data/accounts.db",
-		MaxConnections: 10,
-		BusyTimeoutMs:  5000,
-	}
-}
+	switch cfg.Driver {
+	case "sqlite":
+		// Ensure directory exists for sqlite
+		if cfg.DSN != "" && cfg.DSN != ":memory:" {
+			dir := filepath.Dir(cfg.DSN)
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				return nil, fmt.Errorf("failed to create database directory: %w", err)
+			}
+		}
 
-// NewSQLiteStore creates a new SQLite store using GORM
-func NewSQLiteStore(config SQLiteConfig) (*SQLiteStore, error) {
-	if config.Path == "" {
-		config = DefaultSQLiteConfig()
-	}
-
-	// Ensure directory exists
-	dir := filepath.Dir(config.Path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return nil, fmt.Errorf("failed to create database directory: %w", err)
+		db, err = gorm.Open(sqlite.Open(cfg.DSN), &gorm.Config{
+			SkipDefaultTransaction: true,
+		})
+	case "postgres":
+		db, err = gorm.Open(postgres.Open(cfg.DSN), &gorm.Config{
+			SkipDefaultTransaction: true,
+		})
+	default:
+		return nil, fmt.Errorf("unsupported database driver: %s", cfg.Driver)
 	}
 
-	// Open database connection
-	db, err := gorm.Open(sqlite.Open(config.Path), &gorm.Config{
-		SkipDefaultTransaction: true,
-	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -292,20 +288,26 @@ func NewSQLiteStore(config SQLiteConfig) (*SQLiteStore, error) {
 	}
 
 	// Configure connection pool
-	sqlDB.SetMaxOpenConns(config.MaxConnections)
-	sqlDB.SetMaxIdleConns(config.MaxConnections)
-
-	// Set busy timeout for SQLite
-	if _, err := sqlDB.Exec(fmt.Sprintf("PRAGMA busy_timeout = %d", config.BusyTimeoutMs)); err != nil {
-		return nil, fmt.Errorf("failed to set busy timeout: %w", err)
+	sqlDB.SetMaxOpenConns(cfg.MaxConnections)
+	if cfg.MinIdle > 0 {
+		sqlDB.SetMaxIdleConns(cfg.MinIdle)
+	} else {
+		sqlDB.SetMaxIdleConns(cfg.MaxConnections)
 	}
 
-	// Enable WAL mode for better concurrency
-	if _, err := sqlDB.Exec("PRAGMA journal_mode = WAL"); err != nil {
-		return nil, fmt.Errorf("failed to enable WAL mode: %w", err)
+	if cfg.Driver == "sqlite" {
+		// Set busy timeout for SQLite
+		if _, err := sqlDB.Exec(fmt.Sprintf("PRAGMA busy_timeout = %d", cfg.BusyTimeoutMs)); err != nil {
+			return nil, fmt.Errorf("failed to set busy timeout: %w", err)
+		}
+
+		// Enable WAL mode for better concurrency
+		if _, err := sqlDB.Exec("PRAGMA journal_mode = WAL"); err != nil {
+			return nil, fmt.Errorf("failed to enable WAL mode: %w", err)
+		}
 	}
 
-	store := &SQLiteStore{db: db}
+	store := &SQLStore{db: db}
 
 	// Run automatic migrations
 	if err := store.runMigrations(); err != nil {
@@ -316,7 +318,7 @@ func NewSQLiteStore(config SQLiteConfig) (*SQLiteStore, error) {
 }
 
 // runMigrations runs GORM auto migrations
-func (s *SQLiteStore) runMigrations() error {
+func (s *SQLStore) runMigrations() error {
 	// GORM AutoMigrate handles schema creation and updates
 	if err := s.db.AutoMigrate(&accountDB{}, &auditLogDB{}, &folderSyncStateDB{}); err != nil {
 		return fmt.Errorf("failed to auto migrate: %w", err)
@@ -342,7 +344,7 @@ func (s *SQLiteStore) runMigrations() error {
 }
 
 // GetByID retrieves an account by its ID
-func (s *SQLiteStore) GetByID(ctx context.Context, id string) (*models.Account, error) {
+func (s *SQLStore) GetByID(ctx context.Context, id string) (*models.Account, error) {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -368,7 +370,7 @@ func (s *SQLiteStore) GetByID(ctx context.Context, id string) (*models.Account, 
 }
 
 // GetByEmail retrieves an account by email address
-func (s *SQLiteStore) GetByEmail(ctx context.Context, email string) (*models.Account, error) {
+func (s *SQLStore) GetByEmail(ctx context.Context, email string) (*models.Account, error) {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -394,7 +396,7 @@ func (s *SQLiteStore) GetByEmail(ctx context.Context, email string) (*models.Acc
 }
 
 // List retrieves all accounts with optional pagination
-func (s *SQLiteStore) List(ctx context.Context, offset, limit int) ([]*models.Account, int, error) {
+func (s *SQLStore) List(ctx context.Context, offset, limit int) ([]*models.Account, int, error) {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -453,7 +455,7 @@ func (s *SQLiteStore) List(ctx context.Context, offset, limit int) ([]*models.Ac
 }
 
 // Create stores a new account
-func (s *SQLiteStore) Create(ctx context.Context, account *models.Account) error {
+func (s *SQLStore) Create(ctx context.Context, account *models.Account) error {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -486,7 +488,7 @@ func (s *SQLiteStore) Create(ctx context.Context, account *models.Account) error
 }
 
 // Update modifies an existing account
-func (s *SQLiteStore) Update(ctx context.Context, account *models.Account) error {
+func (s *SQLStore) Update(ctx context.Context, account *models.Account) error {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -533,7 +535,7 @@ func (s *SQLiteStore) Update(ctx context.Context, account *models.Account) error
 }
 
 // Delete removes an account by ID
-func (s *SQLiteStore) Delete(ctx context.Context, id string) error {
+func (s *SQLStore) Delete(ctx context.Context, id string) error {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -558,7 +560,7 @@ func (s *SQLiteStore) Delete(ctx context.Context, id string) error {
 }
 
 // Close releases resources
-func (s *SQLiteStore) Close() error {
+func (s *SQLStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -578,7 +580,7 @@ func (s *SQLiteStore) Close() error {
 }
 
 // Health checks if the store is operational
-func (s *SQLiteStore) Health(ctx context.Context) *HealthStatus {
+func (s *SQLStore) Health(ctx context.Context) *HealthStatus {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -613,7 +615,7 @@ func (s *SQLiteStore) Health(ctx context.Context) *HealthStatus {
 }
 
 // CreateAuditLog stores a new audit log entry
-func (s *SQLiteStore) CreateAuditLog(ctx context.Context, log *models.AuditLog) error {
+func (s *SQLStore) CreateAuditLog(ctx context.Context, log *models.AuditLog) error {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -643,7 +645,7 @@ func (s *SQLiteStore) CreateAuditLog(ctx context.Context, log *models.AuditLog) 
 }
 
 // ListAuditLogs retrieves audit logs with optional pagination
-func (s *SQLiteStore) ListAuditLogs(ctx context.Context, offset, limit int) ([]*models.AuditLog, int, error) {
+func (s *SQLStore) ListAuditLogs(ctx context.Context, offset, limit int) ([]*models.AuditLog, int, error) {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -686,7 +688,7 @@ func (s *SQLiteStore) ListAuditLogs(ctx context.Context, offset, limit int) ([]*
 }
 
 // GetFolderSyncState retrieves sync state for a folder
-func (s *SQLiteStore) GetFolderSyncState(ctx context.Context, accountID, folderName string) (*models.FolderSyncState, error) {
+func (s *SQLStore) GetFolderSyncState(ctx context.Context, accountID, folderName string) (*models.FolderSyncState, error) {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -706,7 +708,7 @@ func (s *SQLiteStore) GetFolderSyncState(ctx context.Context, accountID, folderN
 }
 
 // UpsertFolderSyncState creates or updates folder sync state
-func (s *SQLiteStore) UpsertFolderSyncState(ctx context.Context, state *models.FolderSyncState) error {
+func (s *SQLStore) UpsertFolderSyncState(ctx context.Context, state *models.FolderSyncState) error {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -730,7 +732,7 @@ func (s *SQLiteStore) UpsertFolderSyncState(ctx context.Context, state *models.F
 }
 
 // DeleteFolderSyncState removes folder sync state
-func (s *SQLiteStore) DeleteFolderSyncState(ctx context.Context, accountID, folderName string) error {
+func (s *SQLStore) DeleteFolderSyncState(ctx context.Context, accountID, folderName string) error {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -746,7 +748,7 @@ func (s *SQLiteStore) DeleteFolderSyncState(ctx context.Context, accountID, fold
 }
 
 // ListFolderSyncStates lists all folder sync states for an account
-func (s *SQLiteStore) ListFolderSyncStates(ctx context.Context, accountID string) ([]*models.FolderSyncState, error) {
+func (s *SQLStore) ListFolderSyncStates(ctx context.Context, accountID string) ([]*models.FolderSyncState, error) {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -768,7 +770,7 @@ func (s *SQLiteStore) ListFolderSyncStates(ctx context.Context, accountID string
 }
 
 // GetAccountProcessorConfigs retrieves processor configs for an account
-func (s *SQLiteStore) GetAccountProcessorConfigs(ctx context.Context, accountID string) ([]models.AccountProcessorConfig, error) {
+func (s *SQLStore) GetAccountProcessorConfigs(ctx context.Context, accountID string) ([]models.AccountProcessorConfig, error) {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -797,7 +799,7 @@ func (s *SQLiteStore) GetAccountProcessorConfigs(ctx context.Context, accountID 
 }
 
 // UpdateAccountProcessorConfigs updates processor configs for an account
-func (s *SQLiteStore) UpdateAccountProcessorConfigs(ctx context.Context, accountID string, configs []models.AccountProcessorConfig) error {
+func (s *SQLStore) UpdateAccountProcessorConfigs(ctx context.Context, accountID string, configs []models.AccountProcessorConfig) error {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -822,7 +824,7 @@ func (s *SQLiteStore) UpdateAccountProcessorConfigs(ctx context.Context, account
 }
 
 // EnableAccountProcessor enables/disables a specific processor type
-func (s *SQLiteStore) EnableAccountProcessor(ctx context.Context, accountID, processorType string, enabled bool) error {
+func (s *SQLStore) EnableAccountProcessor(ctx context.Context, accountID, processorType string, enabled bool) error {
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
@@ -855,11 +857,11 @@ func (s *SQLiteStore) EnableAccountProcessor(ctx context.Context, accountID, pro
 }
 
 // GetStats returns store statistics
-func (s *SQLiteStore) GetStats() SQLiteStoreStats {
+func (s *SQLStore) GetStats() SQLStoreStats {
 	s.stats.mu.RLock()
 	defer s.stats.mu.RUnlock()
 
-	return SQLiteStoreStats{
+	return SQLStoreStats{
 		Creates: s.stats.Creates,
 		Updates: s.stats.Updates,
 		Deletes: s.stats.Deletes,
@@ -888,5 +890,5 @@ func contains(s, substr string) bool {
 	return false
 }
 
-// Ensure SQLiteStore implements AccountStore interface
-var _ AccountStore = (*SQLiteStore)(nil)
+// Ensure SQLStore implements AccountStore interface
+var _ AccountStore = (*SQLStore)(nil)

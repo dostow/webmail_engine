@@ -48,9 +48,13 @@ func DefaultWorkerConfig(workerType string) *WorkerConfig {
 			LowPriority:    "envelope_low",
 		},
 		Store: config.StoreConfig{
-			Type: "sqlite",
-			SQLite: &config.SQLiteConfig{
-				Path: "data/webmail.db",
+			Type: "sql",
+			SQL: &config.SQLConfig{
+				Driver:         "sqlite",
+				DSN:            "./data/webmail.db",
+				MaxConnections: 10,
+				MinIdle:        2,
+				BusyTimeoutMs:  5000,
 			},
 		},
 		Logging: config.LoggingConfig{
@@ -118,24 +122,13 @@ func (w *WorkerConfig) ToInternalConfig() *config.Config {
 		},
 	}
 
-	switch w.Store.Type {
-	case "sqlite":
-		cfg.Store.SQLite = &config.SQLiteConfig{
-			Path:           w.Store.SQLite.Path,
-			MaxConnections: 1,
-			BusyTimeoutMs:  5000,
-		}
-	case "postgres":
-		cfg.Store.Postgres = &config.PostgresConfig{
-			Host:           w.Store.Postgres.Host,
-			Port:           w.Store.Postgres.Port,
-			Database:       w.Store.Postgres.Database,
-			User:           w.Store.Postgres.User,
-			Password:       w.Store.Postgres.Password,
-			SSLMode:        w.Store.Postgres.SSLMode,
-			MaxConnections: 5,
-			MinIdle:        1,
-			ConnTimeoutMs:  30000,
+	if w.Store.SQL != nil {
+		cfg.Store.SQL = &config.SQLConfig{
+			Driver:         w.Store.SQL.Driver,
+			DSN:            w.Store.SQL.DSN,
+			MaxConnections: w.Store.SQL.MaxConnections,
+			MinIdle:        w.Store.SQL.MinIdle,
+			BusyTimeoutMs:  w.Store.SQL.BusyTimeoutMs,
 		}
 	}
 

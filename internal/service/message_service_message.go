@@ -159,16 +159,40 @@ func (s *MessageService) GetMessageList(
 		cachedMetadata, err := s.uidListCache.Get(ctx, uidCacheKey)
 
 		if err == nil && cachedMetadata != nil {
-			// Use new smart cache validation
-			if s.isCacheValid(cachedMetadata, currentModSeq, currentMessageCount, sortBy, sortOrder) {
-				log.Printf("UID cache HIT: %d UIDs for folder %s (modseq=%d, sort=%s %s)",
-					len(cachedMetadata.UIDs), folder, cachedMetadata.HighestModSeq, cachedMetadata.SortField, cachedMetadata.SortOrder)
-				allUIDs = cachedMetadata.UIDs
-				// Restore the alreadySorted flag that was saved when this cache entry was written.
-				// Without this, the post-processing block below would use the zero-value (false)
-				// and incorrectly reverse an already-sorted list from the date_range strategy.
-				alreadySorted = cachedMetadata.AlreadySorted
-				goto UseUIDs
+			// Use smart cache validation — two-value return distinguishes
+			// "fresh", "stale-but-incrementally-updatable", and "must reload"
+			valid, needsIncremental := s.isCacheValid(cachedMetadata, currentModSeq, currentMessageCount, sortBy, sortOrder)
+			if valid {
+				if needsIncremental && client.HasCondStore() {
+					// Fast path: only fetch UIDs that changed since the cached modseq
+					log.Printf("UID cache warm, running CONDSTORE delta for folder %s (cached modseq=%d, current=%d)",
+						folder, cachedMetadata.HighestModSeq, currentModSeq)
+					merged, incErr := s.fetchIncrementalUpdates(ctx, client, cachedMetadata.UIDs, cachedMetadata.HighestModSeq, sortOrder)
+					if incErr != nil {
+						log.Printf("Incremental fetch failed (%v), falling back to full reload for folder %s", incErr, folder)
+						// Fall through to full reload below
+					} else {
+						allUIDs = merged
+						alreadySorted = cachedMetadata.AlreadySorted
+						// Update cache with merged list and new modseq
+						if cacheErr := s.uidListCache.Set(ctx, uidCacheKey, allUIDs, len(allUIDs),
+							currentModSeq, client.HasQResync(),
+							string(sortBy), string(sortOrder), "ALL", alreadySorted); cacheErr != nil {
+							log.Printf("Warning: failed to update UID cache after incremental fetch: %v", cacheErr)
+						}
+						goto UseUIDs
+					}
+				} else {
+					// Cache is fully fresh (or server lacks CONDSTORE, use as-is)
+					log.Printf("UID cache HIT: %d UIDs for folder %s (modseq=%d, sort=%s %s)",
+						len(cachedMetadata.UIDs), folder, cachedMetadata.HighestModSeq, cachedMetadata.SortField, cachedMetadata.SortOrder)
+					allUIDs = cachedMetadata.UIDs
+					// Restore the alreadySorted flag that was saved when this cache entry was written.
+					// Without this, the post-processing block below would use the zero-value (false)
+					// and incorrectly reverse an already-sorted list from the date_range strategy.
+					alreadySorted = cachedMetadata.AlreadySorted
+					goto UseUIDs
+				}
 			}
 			log.Printf("UID cache INVALID, refreshing for folder %s", folder)
 		}
@@ -234,17 +258,14 @@ func (s *MessageService) GetMessageList(
 			}
 
 		default:
-			// Very large mailbox: Limited SEARCH
-			sortStrategy = "limited_search"
-			log.Printf("Mailbox too large for SORT (%d > %d), using limited SEARCH", currentMessageCount, maxSortUIDs)
-			allUIDs, err = client.Search("ALL")
-			if err == nil && len(allUIDs) > maxSortUIDs {
-				// Take last N UIDs (most recent in UID order)
-				allUIDs = allUIDs[len(allUIDs)-maxSortUIDs:]
-				log.Printf("Limited to last %d UIDs", len(allUIDs))
-			}
-			// SEARCH returns ascending UIDs — not pre-sorted for display order
-			alreadySorted = false
+			// Very large mailbox: fetch only the newest N UIDs by sequence number.
+			// UID FETCH <start>:<end> (UID) is answered from the server's index in
+			// milliseconds — no body or header scan, no SEARCH ALL timeout.
+			sortStrategy = "sequence_fetch"
+			log.Printf("Very large mailbox: fetching newest %d UIDs by sequence (%d messages)", maxSortUIDs, currentMessageCount)
+			allUIDs, err = client.FetchNewestUIDsBySequence(currentMessageCount, maxSortUIDs)
+			// FetchNewestUIDsBySequence returns UIDs in descending order (newest first)
+			alreadySorted = true
 		}
 
 		if err != nil {

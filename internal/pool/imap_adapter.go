@@ -1231,6 +1231,109 @@ func (a *IMAPAdapter) Expunge() error {
 	_, err := cmd.Collect()
 	return err
 }
+// FetchNewestUIDsBySequence fetches the last `limit` UIDs using sequence numbers.
+// This is O(1) on the server — it reads from the server's index without scanning
+// message content. Returns UIDs in descending order (newest first).
+// total is the current message count from the selected folder (folderInfo.Messages).
+func (a *IMAPAdapter) FetchNewestUIDsBySequence(total, limit int) ([]uint32, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if total <= 0 {
+		return []uint32{}, nil
+	}
+
+	start := total - limit + 1
+	if start < 1 {
+		start = 1
+	}
+
+	// UID FETCH <start>:<total> (UID) — only UID data item, no body/envelope scan
+	seqSet := imap.SeqSet{}
+	seqSet.AddRange(uint32(start), uint32(total))
+
+	fetchOptions := &imap.FetchOptions{
+		UID: true,
+	}
+
+	log.Printf("FetchNewestUIDsBySequence: fetching seqset %d:%d for %d total messages", start, total, total)
+
+	messages, err := a.client.Fetch(seqSet, fetchOptions).Collect()
+	if err != nil {
+		if isConnectionError(err) {
+			a.mu.Unlock()
+			a.invalidate()
+			a.mu.Lock()
+		}
+		return nil, fmt.Errorf("FetchNewestUIDsBySequence failed: %w", err)
+	}
+
+	uids := make([]uint32, 0, len(messages))
+	for _, msg := range messages {
+		uids = append(uids, uint32(msg.UID))
+	}
+
+	// Reverse to descending order (newest UID = newest message for most mailboxes)
+	for i, j := 0, len(uids)-1; i < j; i, j = i+1, j-1 {
+		uids[i], uids[j] = uids[j], uids[i]
+	}
+
+	log.Printf("FetchNewestUIDsBySequence: got %d UIDs (first=%d, last=%d)", len(uids),
+		func() uint32 {
+			if len(uids) > 0 {
+				return uids[0]
+			}
+			return 0
+		}(),
+		func() uint32 {
+			if len(uids) > 0 {
+				return uids[len(uids)-1]
+			}
+			return 0
+		}())
+
+	return uids, nil
+}
+
+// SearchChangedSince finds UIDs that changed (i.e., were added or had flags
+// modified) since the given modseq. Requires CONDSTORE support (RFC 4551).
+// Returns the new/changed UIDs in ascending order.
+func (a *IMAPAdapter) SearchChangedSince(modSeq uint64) ([]uint32, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if !a.HasCondStore() {
+		return nil, fmt.Errorf("server does not support CONDSTORE")
+	}
+
+	criteria := &imap.SearchCriteria{
+		ModSeq: &imap.SearchCriteriaModSeq{
+			ModSeq: modSeq,
+		},
+	}
+
+	searchData, err := withRetry(
+		func() (*imap.SearchData, error) {
+			return searchWithTimeout(a.client, criteria, 15*time.Second)
+		},
+		2,
+		"SEARCH MODSEQ",
+		a.invalidate,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("SearchChangedSince failed: %w", err)
+	}
+
+	uids := searchData.AllUIDs()
+	result := make([]uint32, len(uids))
+	for i, uid := range uids {
+		result[i] = uint32(uid)
+	}
+
+	log.Printf("SearchChangedSince(modseq=%d): found %d changed UIDs", modSeq, len(result))
+	return result, nil
+}
+
 // StreamMessage streams message content in chunks
 func (a *IMAPAdapter) StreamMessage(uid uint32, chunkSize int, handler func(chunk []byte) error) error {
 	// In production, this would use true streaming from the socket.

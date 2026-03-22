@@ -46,48 +46,108 @@ func isConnectionErrorForService(err error) bool {
 	return false
 }
 
-// isCacheValid checks if cached UID list is still valid
+// isCacheValid checks if cached UID list is still valid.
+// Returns:
+//   - valid=true  → cached UIDs can be used (either as-is or after incremental update)
+//   - valid=false → cache must be fully discarded and re-fetched
+//   - needsIncremental=true → modseq advanced; caller should perform CONDSTORE delta
+//     fetch and merge before using the cache (only set when valid=true)
 func (s *MessageService) isCacheValid(
 	cached *messagecache.UIDListWithMetadata,
 	currentModSeq uint64,
 	currentCount int,
 	sortField models.SortField,
 	sortOrder models.SortOrder,
-) bool {
+) (valid bool, needsIncremental bool) {
 	if cached == nil {
-		return false
+		return false, false
 	}
 
-	// Check if sort parameters match
+	// Sort change always requires full reload
 	if cached.SortField != string(sortField) || cached.SortOrder != string(sortOrder) {
 		log.Printf("Cache invalid: sort changed (cached=%s %s, requested=%s %s)",
 			cached.SortField, cached.SortOrder, sortField, sortOrder)
-		return false
+		return false, false
 	}
 
-	// QRESYNC support: Check modseq only
-	if cached.QResyncCapable {
-		valid := currentModSeq <= cached.HighestModSeq
-		if !valid {
-			log.Printf("Cache invalid: modseq changed (cached=%d, current=%d)", cached.HighestModSeq, currentModSeq)
-		}
-		return valid
-	}
-
-	// Non-QRESYNC: Check for significant count changes (>10%)
-	countDiff := abs(currentCount - cached.Count)
-	if cached.Count > 0 && countDiff > cached.Count/10 {
-		log.Printf("Cache invalid: count changed significantly (%d -> %d, diff=%d)", cached.Count, currentCount, countDiff)
-		return false
-	}
-
-	// Check cache age (max 10 minutes)
+	// Expired: full reload needed
 	if time.Since(cached.CachedAt) > messagecache.TTLUIDList {
 		log.Printf("Cache invalid: expired (age=%v)", time.Since(cached.CachedAt))
-		return false
+		return false, false
 	}
 
-	return true
+	// Count changed dramatically (>10% drop or large unexpected jump) → full reload.
+	// Note: small increases (new emails) are handled by the incremental path below.
+	countDiff := abs(currentCount - cached.Count)
+	if cached.Count > 0 && countDiff > cached.Count/10 && currentCount < cached.Count {
+		log.Printf("Cache invalid: count dropped significantly (%d -> %d, diff=%d)", cached.Count, currentCount, countDiff)
+		return false, false
+	}
+
+	// ModSeq advanced → cache is warm but stale; caller should do incremental sync
+	if currentModSeq > cached.HighestModSeq {
+		log.Printf("Cache warm but modseq advanced (cached=%d, current=%d); incremental update needed",
+			cached.HighestModSeq, currentModSeq)
+		return true, true
+	}
+
+	// Cache is fully fresh
+	return true, false
+}
+
+// fetchIncrementalUpdates performs a CONDSTORE delta fetch: it finds UIDs changed
+// since lastModSeq, deduplicates against the cached list, and prepends new UIDs
+// at the front (for descending date-sort) or appends them (ascending).
+// Returns the merged UID list ready to be re-cached with the new modseq.
+func (s *MessageService) fetchIncrementalUpdates(
+	ctx context.Context,
+	client *pool.IMAPAdapter,
+	existingUIDs []uint32,
+	lastModSeq uint64,
+	sortOrder models.SortOrder,
+) ([]uint32, error) {
+	newUIDs, err := client.SearchChangedSince(lastModSeq)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(newUIDs) == 0 {
+		log.Printf("Incremental update: no new UIDs since modseq=%d", lastModSeq)
+		return existingUIDs, nil
+	}
+
+	// Build a set of already-known UIDs for fast dedup
+	known := make(map[uint32]struct{}, len(existingUIDs))
+	for _, uid := range existingUIDs {
+		known[uid] = struct{}{}
+	}
+
+	added := make([]uint32, 0, len(newUIDs))
+	for _, uid := range newUIDs {
+		if _, exists := known[uid]; !exists {
+			added = append(added, uid)
+		}
+	}
+
+	log.Printf("Incremental update: %d new UIDs since modseq=%d (out of %d changed)", len(added), lastModSeq, len(newUIDs))
+
+	if len(added) == 0 {
+		return existingUIDs, nil
+	}
+
+	// For descending sort (newest first) prepend new UIDs; ascending → append
+	var merged []uint32
+	if sortOrder == models.SortOrderDesc {
+		// Reverse added so highest UID is first
+		for i, j := 0, len(added)-1; i < j; i, j = i+1, j-1 {
+			added[i], added[j] = added[j], added[i]
+		}
+		merged = append(added, existingUIDs...)
+	} else {
+		merged = append(existingUIDs, added...)
+	}
+
+	return merged, nil
 }
 
 // handleSortFailure handles SORT failures with appropriate fallback

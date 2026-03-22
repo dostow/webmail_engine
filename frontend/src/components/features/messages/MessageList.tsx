@@ -124,7 +124,7 @@ export function MessageList({
           </Select>
           {folder && (
             <span className="text-xs text-muted-foreground font-medium">
-              📁 {folder}
+              📁 {folder} {total > 0 && `(${total.toLocaleString()})`}
             </span>
           )}
         </div>

@@ -144,6 +144,11 @@ function FolderItem({
         <span className="flex-1 text-left truncate">
           {getFolderDisplayName(folder.name)}
         </span>
+        {folder.messages > 0 && (
+          <span className="text-[10px] text-muted-foreground/70 mr-1">
+            {folder.messages.toLocaleString()}
+          </span>
+        )}
         {hasUnseen && (
           <span
             className={cn(

@@ -291,8 +291,13 @@ func (s *MessageService) GetMessageList(
 	}
 
 UseUIDs:
-	// Use actual UID count as total (folderInfo.Messages may include deleted messages)
+	// Use actual UID count as total by default. However, for huge mailboxes
+	// where we intentionally cap allUIDs to maxSortUIDs (e.g. 50,000), Use
+	// currentMessageCount so the frontend displays the true folder magnitude.
 	totalCount := len(allUIDs)
+	if currentMessageCount > maxSortUIDs {
+		totalCount = currentMessageCount
+	}
 
 	log.Printf("Found %d messages in folder %s, page=%d, limit=%d", totalCount, folder, cursorData.Page, limit)
 

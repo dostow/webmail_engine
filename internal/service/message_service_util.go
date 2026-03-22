@@ -91,6 +91,13 @@ func (s *MessageService) isCacheValid(
 		return true, true
 	}
 
+	// Fallback for servers lacking CONDSTORE (modseq is 0)
+	// If the count changes, we can't do an incremental CONDSTORE fetch, so we must fully invalidate.
+	if currentModSeq == 0 && currentCount != cached.Count {
+		log.Printf("Cache invalid: no modseq and count changed (%d -> %d)", cached.Count, currentCount)
+		return false, false
+	}
+
 	// Cache is fully fresh
 	return true, false
 }

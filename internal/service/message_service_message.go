@@ -120,7 +120,7 @@ func (s *MessageService) GetMessageList(
 
 	// Try cache first with smart modseq checking
 	if s.messageListCache != nil {
-		cachedList, cacheHit := s.messageListCache.Get(ctx, cacheKey, highestModSeq)
+		cachedList, cacheHit := s.messageListCache.Get(ctx, cacheKey, highestModSeq, folderInfo.Messages)
 		if cacheHit && cachedList != nil {
 			_ = cost // Don't deduct tokens for cache hit
 			log.Printf("Cache HIT with modseq %d for folder %s (page %d)", highestModSeq, folder, cachedList.CurrentPage)

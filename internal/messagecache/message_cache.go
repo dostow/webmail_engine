@@ -102,7 +102,8 @@ func (c *MessageListCache) BuildKey(
 
 // Get retrieves a cached message list with smart modseq checking
 // Returns the message list if valid, or nil if cache miss/stale
-func (c *MessageListCache) Get(ctx context.Context, key string, currentModSeq uint64) (*models.MessageList, bool) {
+// currentCount is used as a fallback for invalidation when modseq is 0 (unsupported)
+func (c *MessageListCache) Get(ctx context.Context, key string, currentModSeq uint64, currentCount int) (*models.MessageList, bool) {
 	if c.cache == nil {
 		return nil, false
 	}
@@ -158,8 +159,17 @@ func (c *MessageListCache) Get(ctx context.Context, key string, currentModSeq ui
 	// - If modseq changed, cache MIGHT still be valid for older pages
 	modseqUnchanged := cached.CachedModSeq == currentModSeq
 
+	// Fallback for servers that do not support CONDSTORE (modseq is 0)
+	if currentModSeq == 0 && cached.CachedModSeq == 0 {
+		if cached.MessageList.TotalCount != currentCount {
+			log.Printf("Fallback cache invalidation: message count changed (%d -> %d) when modseq=0",
+				cached.MessageList.TotalCount, currentCount)
+			modseqUnchanged = false
+		}
+	}
+
 	if !modseqUnchanged {
-		// Modseq changed - mailbox was modified
+		// Modseq (or count) changed - mailbox was modified
 		// For descending date sort (newest first), check if this is likely page 1
 		// Page 1 would be affected by new messages, older pages usually aren't
 		if cached.MessageList.CurrentPage == 1 {

@@ -1125,3 +1125,23 @@ func (a *IMAPAdapter) Expunge() error {
 	_, err := cmd.Collect()
 	return err
 }
+// StreamMessage streams message content in chunks
+func (a *IMAPAdapter) StreamMessage(uid uint32, chunkSize int, handler func(chunk []byte) error) error {
+	// In production, this would use true streaming from the socket.
+	// For now, we fetch the message and chunk it to satisfy the interface.
+	data, err := a.FetchMessageRaw(uid)
+	if err != nil {
+		return err
+	}
+
+	for i := 0; i < len(data); i += chunkSize {
+		end := i + chunkSize
+		if end > len(data) {
+			end = len(data)
+		}
+		if err := handler(data[i:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}

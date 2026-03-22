@@ -2,7 +2,6 @@ package pool
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -1079,30 +1078,80 @@ func (c *IMAPClient) StreamMessage(uid uint32, chunkSize int, handler func(chunk
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	c.seqNum++
+	tag := fmt.Sprintf("A%04d", c.seqNum)
 	command := fmt.Sprintf("UID FETCH %d RFC822", uid)
-	if err := c.sendCommandNoResponse(command); err != nil {
+
+	writer := bufio.NewWriter(c.getWriter())
+	_, err := fmt.Fprintf(writer, "%s %s\r\n", tag, command)
+	if err != nil {
+		return err
+	}
+	writer.Flush()
+
+	reader := bufio.NewReader(c.getReader())
+
+	// 1. Read untagged response header
+	// e.g. * 1 FETCH (UID 1 RFC822 {1234}
+	line, err := reader.ReadString('\n')
+	if err != nil {
 		return err
 	}
 
-	reader := bufio.NewReader(c.getReader())
-	var buffer bytes.Buffer
-
-	for {
-		chunk := make([]byte, chunkSize)
-		n, err := reader.Read(chunk)
-		if n > 0 {
-			buffer.Write(chunk[:n])
-			if err := handler(chunk[:n]); err != nil {
-				return err
-			}
-		}
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
-		}
+	if !strings.Contains(line, "{") {
+		return fmt.Errorf("unexpected IMAP response: %s", line)
 	}
 
-	return nil
+	startIdx := strings.Index(line, "{")
+	endIdx := strings.Index(line, "}")
+	if startIdx == -1 || endIdx == -1 {
+		return fmt.Errorf("invalid literal size in response: %s", line)
+	}
+
+	size, err := strconv.Atoi(line[startIdx+1 : endIdx])
+	if err != nil {
+		return fmt.Errorf("failed to parse literal size: %w", err)
+	}
+
+	// 2. Stream the literal data
+	remaining := size
+	for remaining > 0 {
+		readSize := chunkSize
+		if readSize > remaining {
+			readSize = remaining
+		}
+
+		chunk := make([]byte, readSize)
+		n, err := io.ReadFull(reader, chunk)
+		if err != nil {
+			return err
+		}
+
+		if err := handler(chunk[:n]); err != nil {
+			return err
+		}
+
+		remaining -= n
+	}
+
+	// 3. Read the rest of the FETCH line (usually just ")\r\n")
+	_, err = reader.ReadString('\n')
+	if err != nil {
+		return err
+	}
+
+	// 4. Read the tagged response
+	for {
+		line, err = reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+
+		if strings.HasPrefix(line, tag) {
+			if strings.Contains(line, "OK") {
+				return nil
+			}
+			return fmt.Errorf("IMAP error: %s", strings.TrimSpace(line))
+		}
+	}
 }

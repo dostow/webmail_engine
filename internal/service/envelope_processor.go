@@ -477,13 +477,15 @@ func (p *EnvelopeProcessor) GetStats() *ProcessorStats {
 		queueSize = stats.Pending
 	}
 
-	p.stats.mu.RLock()
-	defer p.stats.mu.RUnlock()
-
-	// Return a copy with updated queue size
-	statsCopy := p.stats
-	statsCopy.CurrentQueueSize = queueSize
-	return &statsCopy
+	// Return a copy with updated queue size (manual copy to avoid copying mutex)
+	return &ProcessorStats{
+		ProcessedCount:    p.stats.ProcessedCount,
+		FailedCount:       p.stats.FailedCount,
+		SkippedCount:      p.stats.SkippedCount,
+		LastProcessedAt:   p.stats.LastProcessedAt,
+		AvgProcessingTime: p.stats.AvgProcessingTime,
+		CurrentQueueSize:  queueSize,
+	}
 }
 
 // Helper functions
@@ -727,6 +729,7 @@ func (p *EnvelopeProcessingPipeline) GetPipelineStats() (*PipelineStats, error) 
 		return nil, err
 	}
 
+	// Snapshots are already copies, so we can assign them directly
 	return &PipelineStats{
 		ProcessorStats: *processorStats,
 		QueueStats:     *queueStats,

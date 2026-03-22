@@ -156,7 +156,7 @@ export interface SearchQuery {
   since?: string;
   before?: string;
   limit?: number;
-  offset?: number;
+  cursor?: string;
   sort_by?: string;
   sort_order?: 'asc' | 'desc';
 }
@@ -165,7 +165,13 @@ export interface SearchResponse {
   messages: Message[];
   total_matches: number;
   search_time: number;
-  next_offset?: number;
+  cache_used: boolean;
+  // Pagination
+  current_page: number;
+  total_pages: number;
+  page_size: number;
+  has_more: boolean;
+  next_cursor?: string;
 }
 
 // Send Email

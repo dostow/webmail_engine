@@ -374,12 +374,12 @@ func (h *APIHandler) searchMessages(c *gin.Context) {
 		query.From = c.Query("from")
 		query.To = c.Query("to")
 		query.Subject = c.Query("subject")
+		query.Body = c.Query("body")
+		query.Folder = c.Query("folder")
+		query.Cursor = c.Query("cursor")
 
 		limit, _ := strconv.Atoi(c.Query("limit"))
 		query.Limit = limit
-
-		offset, _ := strconv.Atoi(c.Query("offset"))
-		query.Offset = offset
 	}
 
 	result, err := h.messageService.SearchMessages(c.Request.Context(), query)

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -376,10 +377,29 @@ func (a *IMAPAdapter) FetchMessages(uids []uint32, includeBody bool) ([]MessageE
 		return []MessageEnvelope{}, nil
 	}
 
-	// Convert to imap.UIDSet
+	// Sort UIDs in ascending order for IMAP FETCH
+	sortedUIDs := make([]uint32, len(uids))
+	copy(sortedUIDs, uids)
+	sort.Slice(sortedUIDs, func(i, j int) bool { return sortedUIDs[i] < sortedUIDs[j] })
+
+	// Convert to imap.UIDSet - consolidate consecutive UIDs into ranges
 	uidSet := make(imap.UIDSet, 0)
-	for _, uid := range uids {
-		uidSet = append(uidSet, imap.UIDRange{Start: imap.UID(uid), Stop: imap.UID(uid)})
+	if len(sortedUIDs) > 0 {
+		start := sortedUIDs[0]
+		end := sortedUIDs[0]
+		for i := 1; i < len(sortedUIDs); i++ {
+			if sortedUIDs[i] == end+1 {
+				// Consecutive UID, extend range
+				end = sortedUIDs[i]
+			} else {
+				// Non-consecutive, save current range and start new one
+				uidSet = append(uidSet, imap.UIDRange{Start: imap.UID(start), Stop: imap.UID(end)})
+				start = sortedUIDs[i]
+				end = sortedUIDs[i]
+			}
+		}
+		// Add final range
+		uidSet = append(uidSet, imap.UIDRange{Start: imap.UID(start), Stop: imap.UID(end)})
 	}
 
 	// Create fetch options
@@ -397,11 +417,14 @@ func (a *IMAPAdapter) FetchMessages(uids []uint32, includeBody bool) ([]MessageE
 		}
 	}
 
+	log.Printf("[FetchMessages] Calling Fetch with UID set")
+
 	var envelopes []MessageEnvelope
 
 	// Use FETCH with UID set
 	messages, err := a.client.Fetch(uidSet, fetchOptions).Collect()
 	if err != nil {
+		log.Printf("[FetchMessages] Fetch error: %v", err)
 		if isConnectionError(err) {
 			a.mu.Unlock()
 			a.invalidate()
@@ -409,6 +432,8 @@ func (a *IMAPAdapter) FetchMessages(uids []uint32, includeBody bool) ([]MessageE
 		}
 		return nil, err
 	}
+
+	log.Printf("[FetchMessages] Fetch returned %d messages", len(messages))
 
 	for _, msg := range messages {
 		envelope := MessageEnvelope{

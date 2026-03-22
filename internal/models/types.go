@@ -450,7 +450,12 @@ type SearchResult struct {
 	TotalMatches int              `json:"total_matches"`
 	SearchTime   int64            `json:"search_time"` // milliseconds
 	CacheUsed    bool             `json:"cache_used"`
-	NextOffset   int              `json:"next_offset,omitempty"`
+	// Pagination
+	CurrentPage int    `json:"current_page"`
+	TotalPages  int    `json:"total_pages"`
+	PageSize    int    `json:"page_size"`
+	HasMore     bool   `json:"has_more"`
+	NextCursor  string `json:"next_cursor,omitempty"`
 }
 
 // SendEmailRequest represents a request to send an email

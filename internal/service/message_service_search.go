@@ -62,7 +62,7 @@ func (s *MessageService) searchByDateRange(
 	return uids, nil
 }
 
-// SearchMessages searches for messages
+// SearchMessages searches for messages with pagination support
 func (s *MessageService) SearchMessages(
 	ctx context.Context,
 	query models.SearchQuery,
@@ -118,60 +118,141 @@ func (s *MessageService) SearchMessages(
 	searchCriteria := s.searchStrategy.BuildSearchQuery(query)
 	log.Printf("Searching IMAP with criteria: %s", searchCriteria)
 
+	searchStart := time.Now()
+
 	// Execute search using strategy
-	uids, err := s.searchStrategy.ExecuteSearch(imapCtx, client, searchCriteria)
+	allUIDs, err := s.searchStrategy.ExecuteSearch(imapCtx, client, searchCriteria)
 	if err != nil {
 		log.Printf("IMAP search failed: %v", err)
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
 
-	// Limit results
-	totalMatches := len(uids)
-	limit := query.Limit
-	if limit <= 0 {
-		limit = 50
+	searchTime := time.Since(searchStart).Milliseconds()
+
+	// Apply pagination
+	totalMatches := len(allUIDs)
+	pageSize := query.Limit
+	if pageSize <= 0 {
+		pageSize = 50
 	}
-	if len(uids) > limit {
-		uids = uids[len(uids)-limit:]
+	if pageSize > 200 {
+		pageSize = 200 // Max page size
 	}
 
-	// Fetch message envelopes
-	messages := []models.MessageSummary{} // Initialize as empty slice, not nil
-	if len(uids) > 0 {
-		envelopes, err := client.FetchMessages(uids, false)
+	// Parse cursor to get page number
+	var currentPage int
+	if query.Cursor != "" {
+		cursorData, err := decodeCursor(query.Cursor)
 		if err != nil {
-			// Propagate the error: returning empty messages when totalMatches > 0
-			// is contradictory and hides real failures from the caller.
+			log.Printf("Invalid cursor, starting from page 1: %v", err)
+			currentPage = 0
+		} else {
+			currentPage = cursorData.Page
+		}
+	}
+
+	// Calculate start and end indices
+	startIndex := currentPage * pageSize
+	endIndex := startIndex + pageSize
+
+	// Check if cursor is beyond available results
+	if startIndex >= totalMatches {
+		// Return empty page with pagination info
+		totalPages := 1
+		if totalMatches > 0 {
+			totalPages = (totalMatches + pageSize - 1) / pageSize
+		}
+		return &models.SearchResult{
+			Messages:     []models.MessageSummary{},
+			TotalMatches: totalMatches,
+			SearchTime:   searchTime,
+			CacheUsed:    false,
+			CurrentPage:  currentPage + 1,
+			TotalPages:   totalPages,
+			PageSize:     pageSize,
+			HasMore:      false,
+			NextCursor:   "",
+		}, nil
+	}
+
+	// Apply bounds
+	if endIndex > totalMatches {
+		endIndex = totalMatches
+	}
+
+	// Slice UIDs for current page
+	pageUIDs := allUIDs[startIndex:endIndex]
+
+	// Reverse UIDs for descending order (newest first)
+	// IMAP SEARCH returns UIDs in ascending order
+	for i, j := 0, len(pageUIDs)-1; i < j; i, j = i+1, j-1 {
+		pageUIDs[i], pageUIDs[j] = pageUIDs[j], pageUIDs[i]
+	}
+
+	// Fetch message envelopes for current page only
+	messages := []models.MessageSummary{}
+	if len(pageUIDs) > 0 {
+		envelopes, err := client.FetchMessages(pageUIDs, false)
+		if err != nil {
 			return nil, fmt.Errorf("failed to fetch search result envelopes: %w", err)
 		}
+
+		// Build map for reordering (FetchMessages may return in different order)
+		envelopeMap := make(map[uint32]pool.MessageEnvelope)
 		for _, env := range envelopes {
-			from := models.Contact{}
-			if len(env.From) > 0 {
-				from = env.From[0]
+			envelopeMap[env.UID] = env
+		}
+
+		// Reconstruct in correct order
+		for _, uid := range pageUIDs {
+			if env, ok := envelopeMap[uid]; ok {
+				from := models.Contact{}
+				if len(env.From) > 0 {
+					from = env.From[0]
+				}
+				msg := models.MessageSummary{
+					UID:     fmt.Sprintf("%d", env.UID),
+					Subject: env.Subject,
+					From:    from,
+					To:      env.To,
+					Date:    env.Date,
+					Size:    env.Size,
+					Folder:  folder,
+				}
+				messages = append(messages, msg)
 			}
-			msg := models.MessageSummary{
-				UID:     fmt.Sprintf("%d", env.UID),
-				Subject: env.Subject,
-				From:    from,
-				To:      env.To,
-				Date:    env.Date,
-				Size:    env.Size,
-				Folder:  folder,
-			}
-			messages = append(messages, msg)
 		}
 	}
 
-	// Reverse messages so newest results appear first
-	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
-		messages[i], messages[j] = messages[j], messages[i]
+	// Calculate pagination metadata
+	totalPages := 1
+	if totalMatches > 0 {
+		totalPages = (totalMatches + pageSize - 1) / pageSize
+	}
+
+	// Build next cursor
+	var nextCursor string
+	hasMore := endIndex < totalMatches
+	if hasMore {
+		nextCursorData := CursorData{
+			Page:      currentPage + 1,
+			LastUID:   pageUIDs[len(pageUIDs)-1],
+			SortBy:    query.SortBy,
+			SortOrder: query.SortOrder,
+			Timestamp: time.Now(),
+		}
+		nextCursor, _ = encodeCursor(nextCursorData)
 	}
 
 	return &models.SearchResult{
 		Messages:     messages,
 		TotalMatches: totalMatches,
-		SearchTime:   0,
+		SearchTime:   searchTime,
 		CacheUsed:    false,
-		NextOffset:   query.Offset + len(messages),
+		CurrentPage:  currentPage + 1,
+		TotalPages:   totalPages,
+		PageSize:     pageSize,
+		HasMore:      hasMore,
+		NextCursor:   nextCursor,
 	}, nil
 }

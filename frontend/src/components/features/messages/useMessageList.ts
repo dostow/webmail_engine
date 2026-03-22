@@ -22,6 +22,9 @@ export interface MessageListState {
   searchResults: Message[];
   searchTotal: number;
   searchLoading: boolean;
+  searchCursor?: string;
+  searchCurrentPage: number;
+  searchHasMore: boolean;
 
   // UI State
   loading: boolean;
@@ -38,6 +41,7 @@ export interface MessageListState {
   clear: () => void;
   setSearch: (query: string) => Promise<void>;
   clearSearch: () => void;
+  loadMoreSearch: () => Promise<void>;
 }
 
 const MESSAGES_PER_PAGE = 50;
@@ -92,6 +96,9 @@ export const useMessageList = create<MessageListState>((set, get) => ({
   searchResults: [],
   searchTotal: 0,
   searchLoading: false,
+  searchCursor: undefined,
+  searchCurrentPage: 1,
+  searchHasMore: false,
 
   setAccount: async (accountId) => {
     set({
@@ -107,6 +114,9 @@ export const useMessageList = create<MessageListState>((set, get) => ({
       searchResults: [],
       searchTotal: 0,
       searchLoading: false,
+      searchCursor: undefined,
+      searchCurrentPage: 1,
+      searchHasMore: false,
     });
     await get().refresh();
   },
@@ -253,6 +263,9 @@ export const useMessageList = create<MessageListState>((set, get) => ({
       searchResults: [],
       searchTotal: 0,
       searchLoading: false,
+      searchCursor: undefined,
+      searchCurrentPage: 1,
+      searchHasMore: false,
     });
   },
 
@@ -266,27 +279,61 @@ export const useMessageList = create<MessageListState>((set, get) => ({
       return;
     }
 
-    set({ searchQuery: query, isSearchMode: true, searchLoading: true });
+    set({ searchQuery: query, isSearchMode: true, searchLoading: true, searchCursor: undefined, searchCurrentPage: 1 });
 
     try {
       const searchQuery: SearchQuery = {
         account_id: state.accountId,
         folder: state.folder || 'INBOX',
         keywords: [query.trim()],
-        limit: 100,
+        limit: 50,
       };
       const result = await api.searchMessages(searchQuery);
       set({
         searchResults: result.messages,
         searchTotal: result.total_matches,
         searchLoading: false,
+        searchCursor: result.next_cursor,
+        searchCurrentPage: result.current_page,
+        searchHasMore: result.has_more,
       });
     } catch (err) {
       set({
         searchResults: [],
         searchTotal: 0,
         searchLoading: false,
+        searchCursor: undefined,
+        searchCurrentPage: 1,
+        searchHasMore: false,
       });
+    }
+  },
+
+  loadMoreSearch: async () => {
+    const state = get();
+    if (!state.accountId || !state.searchCursor || !state.searchHasMore) return;
+
+    set({ searchLoading: true });
+
+    try {
+      const searchQuery: SearchQuery = {
+        account_id: state.accountId,
+        folder: state.folder || 'INBOX',
+        keywords: [state.searchQuery.trim()],
+        limit: 50,
+        cursor: state.searchCursor,
+      };
+      const result = await api.searchMessages(searchQuery);
+      set({
+        searchResults: [...state.searchResults, ...result.messages],
+        searchTotal: result.total_matches,
+        searchLoading: false,
+        searchCursor: result.next_cursor,
+        searchCurrentPage: result.current_page,
+        searchHasMore: result.has_more,
+      });
+    } catch (err) {
+      set({ searchLoading: false });
     }
   },
 
@@ -297,6 +344,9 @@ export const useMessageList = create<MessageListState>((set, get) => ({
       searchResults: [],
       searchTotal: 0,
       searchLoading: false,
+      searchCursor: undefined,
+      searchCurrentPage: 1,
+      searchHasMore: false,
     });
   },
 }));

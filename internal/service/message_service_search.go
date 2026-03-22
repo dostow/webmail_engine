@@ -187,24 +187,25 @@ func (s *MessageService) SearchMessages(
 	if len(uids) > 0 {
 		envelopes, err := client.FetchMessages(uids, false)
 		if err != nil {
-			log.Printf("Failed to fetch messages: %v", err)
-		} else {
-			for _, env := range envelopes {
-				from := models.Contact{}
-				if len(env.From) > 0 {
-					from = env.From[0]
-				}
-				msg := models.MessageSummary{
-					UID:     fmt.Sprintf("%d", env.UID),
-					Subject: env.Subject,
-					From:    from,
-					To:      env.To,
-					Date:    env.Date,
-					Size:    env.Size,
-					Folder:  folder,
-				}
-				messages = append(messages, msg)
+			// Propagate the error: returning empty messages when totalMatches > 0
+			// is contradictory and hides real failures from the caller.
+			return nil, fmt.Errorf("failed to fetch search result envelopes: %w", err)
+		}
+		for _, env := range envelopes {
+			from := models.Contact{}
+			if len(env.From) > 0 {
+				from = env.From[0]
 			}
+			msg := models.MessageSummary{
+				UID:     fmt.Sprintf("%d", env.UID),
+				Subject: env.Subject,
+				From:    from,
+				To:      env.To,
+				Date:    env.Date,
+				Size:    env.Size,
+				Folder:  folder,
+			}
+			messages = append(messages, msg)
 		}
 	}
 

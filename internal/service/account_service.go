@@ -212,17 +212,28 @@ func (s *AccountService) updateAccountConfig(ctx context.Context, acc *models.Ac
 		return nil, fmt.Errorf("failed to encrypt password: %w", err)
 	}
 
-	// Update account configuration
+	// Update account configuration - only update fields that are provided
 	acc.AuthType = req.AuthType
-	acc.IMAPConfig.Host = req.IMAPHost
-	acc.IMAPConfig.Port = req.IMAPPort
-	acc.IMAPConfig.Encryption = req.IMAPEncryption
 	acc.IMAPConfig.Password = encryptedPassword
-	acc.SMTPConfig.Host = req.SMTPHost
-	acc.SMTPConfig.Port = req.SMTPPort
-	acc.SMTPConfig.Encryption = req.SMTPEncryption
 	acc.SMTPConfig.Password = encryptedPassword
-	acc.ConnectionLimit = req.ConnectionLimit
+
+	// Update IMAP config only if host is provided
+	if req.IMAPHost != "" {
+		acc.IMAPConfig.Host = req.IMAPHost
+		acc.IMAPConfig.Port = req.IMAPPort
+		acc.IMAPConfig.Encryption = req.IMAPEncryption
+	}
+
+	// Update SMTP config only if host is provided
+	if req.SMTPHost != "" {
+		acc.SMTPConfig.Host = req.SMTPHost
+		acc.SMTPConfig.Port = req.SMTPPort
+		acc.SMTPConfig.Encryption = req.SMTPEncryption
+	}
+
+	if req.ConnectionLimit > 0 {
+		acc.ConnectionLimit = req.ConnectionLimit
+	}
 	acc.SyncSettings = req.SyncSettings
 	acc.ProxyConfig = req.ProxyConfig
 	acc.UpdatedAt = time.Now()

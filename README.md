@@ -219,6 +219,45 @@ See `config.example.json` for all configuration options:
 - **Storage**: Temporary file paths, cleanup intervals
 - **Webhook**: Event processing settings
 
+### Environment Variable Expansion
+
+The configuration file supports environment variable expansion using the syntax:
+
+- `${VAR_NAME}` - Expands to the value of `VAR_NAME`
+- `${VAR_NAME:-default}` - Uses `default` if `VAR_NAME` is not set or empty
+
+Example `config.json`:
+
+```json
+{
+  "store": {
+    "type": "sql",
+    "sql": {
+      "driver": "postgres",
+      "dsn": "${DATABASE_URL}"
+    }
+  },
+  "security": {
+    "encryption_key": "${ENCRYPTION_KEY}",
+    "webhook_secret": "${WEBHOOK_SECRET:-fallback-secret}"
+  }
+}
+```
+
+Copy `.env.example` to `.env` and set your environment variables:
+
+```bash
+cp .env.example .env
+# Edit .env with your values
+```
+
+Then source before running:
+
+```bash
+export $(cat .env | xargs)
+go run cmd/main.go -config config.json
+```
+
 ## Security Considerations
 
 1. **Encryption Key**: Must be exactly 32 bytes for AES-256-GCM

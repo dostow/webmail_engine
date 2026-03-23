@@ -4,6 +4,8 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
+import { createAccount } from '@/services/api';
+import type { AddAccountRequest, APIError } from '@/types';
 
 interface AccountWizardProps {
   onComplete: () => void;
@@ -30,32 +32,35 @@ export function AccountWizard({ onComplete, onCancel }: AccountWizardProps) {
     setSubmitting(true);
 
     try {
-      const response = await fetch('/v1/accounts', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          email: form.email,
-          password: form.password,
-          imap_host: form.imap_host,
-          imap_port: parseInt(form.imap_port, 10),
-          imap_encryption: form.imap_encryption,
-          smtp_host: form.smtp_host,
-          smtp_port: parseInt(form.smtp_port, 10),
-          smtp_encryption: form.smtp_encryption,
-        }),
-      });
+      const request: AddAccountRequest = {
+        email: form.email,
+        password: form.password,
+        imap_host: form.imap_host,
+        imap_port: parseInt(form.imap_port, 10),
+        imap_encryption: form.imap_encryption,
+        smtp_host: form.smtp_host,
+        smtp_port: parseInt(form.smtp_port, 10),
+        smtp_encryption: form.smtp_encryption,
+      };
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to add account');
-      }
+      await createAccount(request);
 
       toast.success('Account added successfully');
       onComplete();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to add account');
+      console.error('Error adding account:', error);
+      if (error instanceof Error) {
+        // Check if it's an API error with specific structure
+        if ('code' in error || 'details' in error) {
+          // This is likely an ApiError from our service
+          const apiError = error as APIError; // Type assertion to access custom properties
+          toast.error(apiError.message || 'Failed to add account');
+        } else {
+          toast.error(error.message || 'Failed to add account');
+        }
+      } else {
+        toast.error('Failed to add account');
+      }
     } finally {
       setSubmitting(false);
     }

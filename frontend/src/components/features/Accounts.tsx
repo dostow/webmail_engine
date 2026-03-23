@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useLoaderData, useNavigation } from 'react-router-dom';
+import { useLoaderData, useNavigation, useNavigate } from 'react-router-dom';
 import {
   Plus,
   RefreshCw,
@@ -23,6 +23,7 @@ import * as api from '@/services/api';
 export function AccountsView() {
   const accounts = useLoaderData() as Account[];
   const navigation = useNavigation();
+  const navigate = useNavigate();
   const [showWizard, setShowWizard] = useState(false);
 
   const handleDelete = async (id: string) => {
@@ -185,7 +186,7 @@ export function AccountsView() {
         <AccountWizard
           onComplete={() => {
             setShowWizard(false);
-            window.location.reload();
+            navigate(0); // Re-run loader to refresh account list
           }}
           onCancel={() => setShowWizard(false)}
         />

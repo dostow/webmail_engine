@@ -145,25 +145,6 @@ func main() {
 	// Set the account service in the session pool (circular dependency resolution)
 	imapSessionPool.SetAccountService(accountService)
 
-	// Initialize accounts from store
-	if cfg.Scheduler.Enabled {
-		log.Println("Loading accounts from store...")
-		accounts, err := accountService.ListAccounts(context.Background())
-		if err != nil {
-			log.Printf("Warning: Failed to load accounts from store: %v", err)
-		} else {
-			log.Printf("Loaded %d accounts from store", len(accounts))
-
-			// Restore active connections for each account
-			// Fair-use scheduling will be lazily initialized on first operation
-			for _, acc := range accounts {
-				if acc.Status == models.AccountStatusActive {
-					log.Printf("Restoring account %s (%s)", acc.ID, acc.Email)
-				}
-			}
-		}
-	}
-
 	messageService, err := service.NewMessageService(
 		imapSessionPool,
 		memCache,

@@ -177,7 +177,7 @@ export function MessagesView() {
         <ResizableHandle withHandle />
 
         {/* Message list pane */}
-        <ResizablePanel id="message-list" defaultSize="30%" minSize="30%" maxSize="50%" className="no-scrollbar">
+        <ResizablePanel id="message-list" defaultSize="25%" minSize="30%" maxSize="50%" className="no-scrollbar">
           <MessageList
             accounts={accounts}
             messages={messages}

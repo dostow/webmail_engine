@@ -107,52 +107,51 @@ function FolderItem({
 
   return (
     <div
-      className="w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-colors hover:bg-muted"
+      className={cn(
+        "w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-colors hover:bg-muted overflow-hidden",
+        isSelected
+          ? 'bg-primary text-primary-foreground'
+          : 'text-muted-foreground hover:text-foreground',
+      )}
       style={{ paddingLeft: `${12 + (depth * 16)}px` }}
     >
-      {/* Expand/collapse chevron for folders with children */}
-      {hasChildren ? (
-        <button
-          onClick={onToggleExpand}
-          className="p-0.5 hover:bg-muted-foreground/20 rounded"
+      {/* Expand/collapse chevron - always present but hidden when no children to prevent layout shift */}
+      <button
+        onClick={onToggleExpand}
+        className={cn(
+          "p-0.5 rounded transition-opacity shrink-0",
+          hasChildren ? "hover:bg-muted-foreground/20" : "opacity-0 pointer-events-none"
+        )}
+      >
+        <svg
+          className={`h-3 w-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
         >
-          <svg
-            className={`h-3 w-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
-          </svg>
-        </button>
-      ) : (
-        <div className="w-4" />
-      )}
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+        </svg>
+      </button>
 
       <button
         onClick={onClick}
-        className={cn(
-          'flex-1 flex items-center gap-2 rounded-md transition-colors',
-          isSelected
-            ? 'bg-primary text-primary-foreground'
-            : 'text-muted-foreground hover:text-foreground'
-        )}
+        className="flex-1 flex items-center gap-2 rounded-md transition-colors min-w-0"
       >
         <span className={cn(isSelected ? 'text-primary-foreground' : 'text-muted-foreground')}>
           {getFolderIcon(folder.name)}
         </span>
-        <span className="flex-1 text-left truncate">
+        <span className="flex-1 text-left truncate min-w-0 w-0">
           {getFolderDisplayName(folder.name)}
         </span>
         {folder.messages > 0 && (
-          <span className="text-[10px] text-muted-foreground/70 mr-1">
+          <span className="text-[10px] text-muted-foreground/70 mr-1 shrink-0">
             {folder.messages.toLocaleString()}
           </span>
         )}
         {hasUnseen && (
           <span
             className={cn(
-              'text-xs font-medium px-1.5 py-0.5 rounded-full min-w-[1.25rem] text-center',
+              'text-xs font-medium px-1.5 py-0.5 rounded-full min-w-5 text-center shrink-0',
               isSelected
                 ? 'bg-primary-foreground text-primary'
                 : 'bg-primary text-primary-foreground'
@@ -269,7 +268,7 @@ export function FolderPane({ accountId, selectedFolder, onSelectFolder }: Folder
     <div className="h-full flex flex-col">
       {/* Folder tree */}
       <ScrollArea className="flex-1">
-        <div className="p-2 space-y-0.5">
+        <div className="p-2 space-y-0. shrink-0">
           {folderTree.map((node) => (
             <FolderTreeNodeItem
               key={node.path}

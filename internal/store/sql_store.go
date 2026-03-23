@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,30 +19,86 @@ import (
 	"webmail_engine/internal/models"
 )
 
+// JSONBlob is a custom type for handling JSON columns in the database.
+// It properly implements the sql.Scanner and driver.Valuer interfaces
+// to handle the conversion between database TEXT/JSON columns and Go byte slices.
+type JSONBlob []byte
+
+// Scan implements the sql.Scanner interface.
+// It converts the database value (string or []byte) into JSONBlob.
+func (j *JSONBlob) Scan(value interface{}) error {
+	if value == nil {
+		*j = nil
+		return nil
+	}
+
+	switch v := value.(type) {
+	case []byte:
+		*j = JSONBlob(v)
+	case string:
+		*j = JSONBlob(v)
+	default:
+		return fmt.Errorf("failed to scan JSONBlob: unsupported type %T", value)
+	}
+	return nil
+}
+
+// Value implements the driver.Valuer interface.
+// It converts JSONBlob into a driver.Value for database operations.
+func (j JSONBlob) Value() (driver.Value, error) {
+	if j == nil {
+		return nil, nil
+	}
+	return string(j), nil
+}
+
+// MarshalJSON implements json.Marshaler for JSONBlob.
+func (j JSONBlob) MarshalJSON() ([]byte, error) {
+	if j == nil {
+		return []byte("null"), nil
+	}
+	return j, nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler for JSONBlob.
+func (j *JSONBlob) UnmarshalJSON(data []byte) error {
+	if data == nil {
+		*j = nil
+		return nil
+	}
+	// Handle JSON null explicitly
+	if string(data) == "null" {
+		*j = nil
+		return nil
+	}
+	*j = JSONBlob(data)
+	return nil
+}
+
 // accountDB is the GORM model for account persistence
 type accountDB struct {
-	ID               string          `gorm:"primaryKey;type:text;not null"`
-	Email            string          `gorm:"uniqueIndex;type:text;not null"`
-	AuthType         string          `gorm:"type:text;not null"`
-	Status           string          `gorm:"type:text;not null"`
-	IMAPHost         string          `gorm:"column:imap_host;type:text;not null"`
-	IMAPPort         int             `gorm:"column:imap_port;not null"`
-	IMAPEncryption   string          `gorm:"column:imap_encryption;type:text;not null"`
-	IMAPUsername     string          `gorm:"column:imap_username;type:text;not null"`
-	IMAPPassword     string          `gorm:"column:imap_password;type:text;not null"`
-	SMTPHost         string          `gorm:"column:smtp_host;type:text;not null"`
-	SMTPPort         int             `gorm:"column:smtp_port;not null"`
-	SMTPEncryption   string          `gorm:"column:smtp_encryption;type:text;not null"`
-	SMTPUsername     string          `gorm:"column:smtp_username;type:text;not null"`
-	SMTPPassword     string          `gorm:"column:smtp_password;type:text;not null"`
-	ConnectionLimit  int             `gorm:"column:connection_limit;not null"`
-	SyncSettings     json.RawMessage `gorm:"column:sync_settings;type:text;not null"`
-	ProxyConfig      json.RawMessage `gorm:"column:proxy_config;type:text"`
-	FairUsePolicy    json.RawMessage `gorm:"column:fair_use_policy;type:text"`
-	ProcessorConfigs json.RawMessage `gorm:"column:processor_configs;type:text"`
-	CreatedAt        time.Time       `gorm:"column:created_at;not null"`
-	UpdatedAt        time.Time       `gorm:"column:updated_at;not null"`
-	LastSyncAt       *time.Time      `gorm:"column:last_sync_at"`
+	ID               string     `gorm:"primaryKey;type:text;not null"`
+	Email            string     `gorm:"uniqueIndex;type:text;not null"`
+	AuthType         string     `gorm:"type:text;not null"`
+	Status           string     `gorm:"type:text;not null"`
+	IMAPHost         string     `gorm:"column:imap_host;type:text;not null"`
+	IMAPPort         int        `gorm:"column:imap_port;not null"`
+	IMAPEncryption   string     `gorm:"column:imap_encryption;type:text;not null"`
+	IMAPUsername     string     `gorm:"column:imap_username;type:text;not null"`
+	IMAPPassword     string     `gorm:"column:imap_password;type:text;not null"`
+	SMTPHost         string     `gorm:"column:smtp_host;type:text;not null"`
+	SMTPPort         int        `gorm:"column:smtp_port;not null"`
+	SMTPEncryption   string     `gorm:"column:smtp_encryption;type:text;not null"`
+	SMTPUsername     string     `gorm:"column:smtp_username;type:text;not null"`
+	SMTPPassword     string     `gorm:"column:smtp_password;type:text;not null"`
+	ConnectionLimit  int        `gorm:"column:connection_limit;not null"`
+	SyncSettings     JSONBlob   `gorm:"column:sync_settings;type:text;not null"`
+	ProxyConfig      JSONBlob   `gorm:"column:proxy_config;type:text"`
+	FairUsePolicy    JSONBlob   `gorm:"column:fair_use_policy;type:text"`
+	ProcessorConfigs JSONBlob   `gorm:"column:processor_configs;type:text"`
+	CreatedAt        time.Time  `gorm:"column:created_at;not null"`
+	UpdatedAt        time.Time  `gorm:"column:updated_at;not null"`
+	LastSyncAt       *time.Time `gorm:"column:last_sync_at"`
 }
 
 // TableName specifies the table name

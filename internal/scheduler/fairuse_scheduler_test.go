@@ -33,9 +33,8 @@ func TestFairUseScheduler_ConsumeTokens(t *testing.T) {
 	defer scheduler.Shutdown()
 
 	accountID := "test_account"
-	scheduler.InitializeAccount(accountID, nil)
 
-	// Consume some tokens
+	// Test lazy initialization - no explicit InitializeAccount call
 	success, cost, err := scheduler.ConsumeTokens(accountID, "FETCH", "normal")
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
@@ -47,7 +46,11 @@ func TestFairUseScheduler_ConsumeTokens(t *testing.T) {
 		t.Errorf("Expected cost of 1, got %d", cost)
 	}
 
+	// Verify bucket was lazily initialized
 	bucket := scheduler.GetTokenBucket(accountID)
+	if bucket == nil {
+		t.Fatal("Expected token bucket to be lazily initialized")
+	}
 	if bucket.Tokens != 99 {
 		t.Errorf("Expected 99 tokens after consumption, got %d", bucket.Tokens)
 	}
@@ -108,4 +111,41 @@ func TestTokenBucket_Refill(t *testing.T) {
 	}
 
 	close(bucket.stopChan)
+}
+
+func TestFairUseScheduler_LazyInitialization(t *testing.T) {
+	scheduler := NewFairUseScheduler()
+	defer scheduler.Shutdown()
+
+	accountID := "test_account"
+
+	// Verify bucket doesn't exist before first use
+	bucket := scheduler.GetTokenBucket(accountID)
+	if bucket != nil {
+		t.Error("Expected nil bucket before first operation")
+	}
+
+	// First ConsumeTokens call should trigger lazy initialization
+	success, cost, err := scheduler.ConsumeTokens(accountID, "FETCH", "normal")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if !success {
+		t.Error("Expected to successfully consume tokens")
+	}
+	if cost != 1 {
+		t.Errorf("Expected cost of 1, got %d", cost)
+	}
+
+	// Verify bucket was initialized with default policy
+	bucket = scheduler.GetTokenBucket(accountID)
+	if bucket == nil {
+		t.Fatal("Expected token bucket to be lazily initialized")
+	}
+	if bucket.Tokens != 99 {
+		t.Errorf("Expected 99 tokens after consumption, got %d", bucket.Tokens)
+	}
+	if bucket.MaxTokens != 100 {
+		t.Errorf("Expected 100 max tokens (default), got %d", bucket.MaxTokens)
+	}
 }

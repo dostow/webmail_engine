@@ -155,8 +155,7 @@ func (s *AccountService) AddAccount(ctx context.Context, req models.AddAccountRe
 	now := time.Now()
 	account.LastSyncAt = &now
 
-	// Initialize fair-use scheduling
-	s.scheduler.InitializeAccount(accountID, req.SyncSettings.FairUsePolicy)
+	// Fair-use scheduling will be lazily initialized on first operation
 
 	// Store account in persistent store
 	if err := s.store.Create(ctx, account); err != nil {
@@ -244,8 +243,7 @@ func (s *AccountService) updateAccountConfig(ctx context.Context, acc *models.Ac
 	// Close old connections to force reconnect with new credentials
 	s.pool.CloseAccount(acc.ID)
 
-	// Reinitialize fair-use scheduling with new policy
-	s.scheduler.InitializeAccount(acc.ID, req.SyncSettings.FairUsePolicy)
+	// Fair-use scheduling will be lazily reinitialized on next operation
 
 	// Restart sync if enabled
 	if s.syncMgr != nil {

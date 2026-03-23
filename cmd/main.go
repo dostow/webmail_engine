@@ -155,11 +155,10 @@ func main() {
 			log.Printf("Loaded %d accounts from store", len(accounts))
 
 			// Restore active connections for each account
+			// Fair-use scheduling will be lazily initialized on first operation
 			for _, acc := range accounts {
 				if acc.Status == models.AccountStatusActive {
 					log.Printf("Restoring account %s (%s)", acc.ID, acc.Email)
-					// Reinitialize fair-use scheduling
-					fairUseScheduler.InitializeAccount(acc.ID, acc.SyncSettings.FairUsePolicy)
 				}
 			}
 		}

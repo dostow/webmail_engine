@@ -122,13 +122,13 @@ func NewFairUseScheduler() *FairUseScheduler {
 func (s *FairUseScheduler) InitializeAccount(accountID string, policy *models.FairUsePolicy) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	if policy == nil {
 		policy = s.defaultPolicy
 	}
-	
+
 	s.policies[accountID] = policy
-	
+
 	bucket := &TokenBucket{
 		accountID:  accountID,
 		tokens:     policy.TokenBucketSize,
@@ -137,46 +137,84 @@ func (s *FairUseScheduler) InitializeAccount(accountID string, policy *models.Fa
 		lastRefill: time.Now(),
 		stopChan:   make(chan struct{}),
 	}
-	
+
 	// Start refill ticker
 	bucket.refillTicker = time.NewTicker(time.Minute / time.Duration(policy.RefillRate))
 	go bucket.startRefill(bucket.refillTicker, bucket.stopChan)
-	
+
+	s.buckets[accountID] = bucket
+}
+
+// initializeAccountLazy initializes an account with lazy initialization (thread-safe)
+// Only initializes if the account doesn't already exist
+func (s *FairUseScheduler) initializeAccountLazy(accountID string, policy *models.FairUsePolicy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Double-check after acquiring write lock (another goroutine may have initialized)
+	if _, exists := s.buckets[accountID]; exists {
+		return
+	}
+
+	if policy == nil {
+		policy = s.defaultPolicy
+	}
+
+	s.policies[accountID] = policy
+
+	bucket := &TokenBucket{
+		accountID:  accountID,
+		tokens:     policy.TokenBucketSize,
+		maxTokens:  policy.TokenBucketSize,
+		refillRate: policy.RefillRate,
+		lastRefill: time.Now(),
+		stopChan:   make(chan struct{}),
+	}
+
+	// Start refill ticker
+	bucket.refillTicker = time.NewTicker(time.Minute / time.Duration(policy.RefillRate))
+	go bucket.startRefill(bucket.refillTicker, bucket.stopChan)
+
 	s.buckets[accountID] = bucket
 }
 
 // ConsumeTokens attempts to consume tokens for an operation
+// If the account is not initialized, it will be lazily initialized with default policy
 func (s *FairUseScheduler) ConsumeTokens(accountID, operation string, priority string) (bool, int, error) {
 	s.mu.RLock()
 	bucket, exists := s.buckets[accountID]
 	policy, hasPolicy := s.policies[accountID]
 	s.mu.RUnlock()
-	
+
+	// Lazy initialization if bucket doesn't exist
 	if !exists {
-		// Account not initialized, use default policy
-		return true, 0, nil
+		s.initializeAccountLazy(accountID, nil)
+		s.mu.RLock()
+		bucket, _ = s.buckets[accountID]
+		policy, hasPolicy = s.policies[accountID]
+		s.mu.RUnlock()
 	}
-	
+
 	if !hasPolicy {
 		policy = s.defaultPolicy
 	}
-	
+
 	if !policy.Enabled {
 		return true, 0, nil
 	}
-	
+
 	// Get operation cost
 	cost := policy.OperationCosts[operation]
 	if cost == 0 {
 		cost = DefaultOperationCosts[operation]
 	}
-	
+
 	// Try to consume tokens
 	if bucket.tryConsume(cost) {
 		s.stats.TotalOperations++
 		return true, cost, nil
 	}
-	
+
 	// Not enough tokens
 	s.stats.ThrottledRequests++
 	return false, cost, models.ErrInsufficientTokens

@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -24,8 +26,8 @@ type Config struct {
 
 // StoreConfig holds account persistence store configuration
 type StoreConfig struct {
-	Type     string          `json:"type"` // "memory", "sql"
-	SQL      *SQLConfig      `json:"sql,omitempty"`
+	Type string     `json:"type"` // "memory", "sql"
+	SQL  *SQLConfig `json:"sql,omitempty"`
 }
 
 // SQLConfig holds generalized SQL database configuration
@@ -248,6 +250,9 @@ func LoadFromFile(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
+	// Expand environment variables in config values
+	expandEnvVars(config)
+
 	return config, nil
 }
 
@@ -350,4 +355,65 @@ func (c *Config) SaveToFile(path string) error {
 	}
 
 	return nil
+}
+
+// expandEnvVars recursively expands environment variables in all string fields
+func expandEnvVars(cfg interface{}) {
+	v := reflect.ValueOf(cfg)
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		return
+	}
+	expandEnvVarsRecursive(v.Elem())
+}
+
+func expandEnvVarsRecursive(v reflect.Value) {
+	switch v.Kind() {
+	case reflect.String:
+		if v.CanSet() {
+			v.SetString(expandEnvString(v.String()))
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			expandEnvVarsRecursive(v.Field(i))
+		}
+	case reflect.Ptr:
+		if !v.IsNil() {
+			expandEnvVarsRecursive(v.Elem())
+		}
+	case reflect.Slice:
+		for i := 0; i < v.Len(); i++ {
+			expandEnvVarsRecursive(v.Index(i))
+		}
+	case reflect.Map:
+		for _, key := range v.MapKeys() {
+			expandEnvVarsRecursive(v.MapIndex(key))
+		}
+	}
+}
+
+// expandEnvString expands environment variables with support for default values
+// Supports: ${VAR}, $VAR, ${VAR:-default}
+func expandEnvString(s string) string {
+	return os.Expand(s, func(name string) string {
+		// Handle default value syntax: VAR:-default
+		var varName, defaultValue string
+		var hasDefault bool
+
+		if idx := strings.Index(name, ":-"); idx != -1 {
+			varName = name[:idx]
+			defaultValue = name[idx+2:]
+			hasDefault = true
+		} else {
+			varName = name
+		}
+
+		val := os.Getenv(varName)
+		if val != "" {
+			return val
+		}
+		if hasDefault {
+			return defaultValue
+		}
+		return val
+	})
 }

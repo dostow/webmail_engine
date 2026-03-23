@@ -549,6 +549,7 @@ func (s *AccountService) UpdateAccount(ctx context.Context, accountID string, up
 	}
 
 	syncSettingsChanged := false
+	configChanged := false
 
 	// Apply updates
 	for key, value := range updates {
@@ -566,6 +567,74 @@ func (s *AccountService) UpdateAccount(ctx context.Context, accountID string, up
 			if status, ok := value.(models.AccountStatus); ok {
 				account.Status = status
 			}
+		// IMAP configuration fields
+		case "imap_host":
+			if host, ok := value.(string); ok {
+				account.IMAPConfig.Host = host
+				configChanged = true
+			}
+		case "imap_port":
+			if port, ok := value.(int); ok {
+				account.IMAPConfig.Port = port
+				configChanged = true
+			}
+		case "imap_encryption":
+			if enc, ok := value.(string); ok {
+				account.IMAPConfig.Encryption = models.EncryptionType(enc)
+				configChanged = true
+			}
+		case "imap_username":
+			if username, ok := value.(string); ok {
+				account.IMAPConfig.Username = username
+				configChanged = true
+			}
+		case "imap_password":
+			if password, ok := value.(string); ok && password != "" {
+				account.IMAPConfig.Password = password
+				configChanged = true
+			}
+		// SMTP configuration fields
+		case "smtp_host":
+			if host, ok := value.(string); ok {
+				account.SMTPConfig.Host = host
+				configChanged = true
+			}
+		case "smtp_port":
+			if port, ok := value.(int); ok {
+				account.SMTPConfig.Port = port
+				configChanged = true
+			}
+		case "smtp_encryption":
+			if enc, ok := value.(string); ok {
+				account.SMTPConfig.Encryption = models.EncryptionType(enc)
+				configChanged = true
+			}
+		case "smtp_username":
+			if username, ok := value.(string); ok {
+				account.SMTPConfig.Username = username
+				configChanged = true
+			}
+		case "smtp_password":
+			if password, ok := value.(string); ok && password != "" {
+				account.SMTPConfig.Password = password
+				configChanged = true
+			}
+		// Top-level email and auth_type fields
+		case "email":
+			if email, ok := value.(string); ok {
+				account.Email = email
+			}
+		case "auth_type":
+			if authType, ok := value.(string); ok {
+				account.AuthType = models.AuthType(authType)
+			}
+		// Top-level password (updates both IMAP and SMTP)
+		case "password":
+			if password, ok := value.(string); ok && password != "" {
+				account.IMAPConfig.Password = password
+				account.SMTPConfig.Password = password
+				configChanged = true
+			}
 		}
 	}
 
@@ -574,6 +643,13 @@ func (s *AccountService) UpdateAccount(ctx context.Context, accountID string, up
 	// Update in store
 	if err := s.store.Update(ctx, account); err != nil {
 		return nil, fmt.Errorf("failed to update account in store: %w", err)
+	}
+
+	// Handle configuration changes (IMAP/SMTP)
+	if configChanged {
+		// Close old connections to force reconnect with new credentials
+		s.pool.CloseAccount(accountID)
+		log.Printf("Closed connections for account %s due to configuration change", accountID)
 	}
 
 	// Handle sync settings changes

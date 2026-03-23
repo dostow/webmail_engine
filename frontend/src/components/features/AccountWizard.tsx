@@ -38,20 +38,12 @@ export function AccountWizard({ onComplete, onCancel }: AccountWizardProps) {
         body: JSON.stringify({
           email: form.email,
           password: form.password,
-          imap_config: {
-            host: form.imap_host,
-            port: parseInt(form.imap_port, 10),
-            encryption: form.imap_encryption,
-            username: form.email,
-            password: form.password,
-          },
-          smtp_config: {
-            host: form.smtp_host,
-            port: parseInt(form.smtp_port, 10),
-            encryption: form.smtp_encryption,
-            username: form.email,
-            password: form.password,
-          },
+          imap_host: form.imap_host,
+          imap_port: parseInt(form.imap_port, 10),
+          imap_encryption: form.imap_encryption,
+          smtp_host: form.smtp_host,
+          smtp_port: parseInt(form.smtp_port, 10),
+          smtp_encryption: form.smtp_encryption,
         }),
       });
 

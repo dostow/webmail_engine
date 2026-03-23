@@ -52,16 +52,22 @@ export function UpdateCredentialsDialog({
     setLoading(true);
 
     try {
-      await api.updateAccount(account.id, {
+      const updates: Record<string, unknown> = {
         email: formData.email,
-        password: formData.password || undefined,
-        imap_host: formData.imap_host || undefined,
-        imap_port: formData.imap_port ? parseInt(formData.imap_port, 10) : undefined,
-        imap_encryption: formData.imap_encryption || undefined,
-        smtp_host: formData.smtp_host || undefined,
-        smtp_port: formData.smtp_port ? parseInt(formData.smtp_port, 10) : undefined,
-        smtp_encryption: formData.smtp_encryption || undefined,
-      });
+        imap_host: formData.imap_host,
+        imap_port: parseInt(formData.imap_port, 10),
+        imap_encryption: formData.imap_encryption,
+        smtp_host: formData.smtp_host,
+        smtp_port: parseInt(formData.smtp_port, 10),
+        smtp_encryption: formData.smtp_encryption,
+      };
+
+      // Only include password if it's provided
+      if (formData.password) {
+        updates.password = formData.password;
+      }
+
+      await api.updateAccount(account.id, updates);
 
       onSuccess();
       onOpenChange(false);

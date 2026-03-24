@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"webmail_engine/internal/config"
+	"webmail_engine/internal/envelopequeue"
+	"webmail_engine/internal/pool"
+	"webmail_engine/internal/service"
 	"webmail_engine/internal/store"
 	"webmail_engine/internal/taskmaster"
 	"webmail_engine/internal/workerconfig"
@@ -21,10 +24,13 @@ import (
 // SyncWorkerWithTaskmaster is a sync worker that uses taskmaster for task scheduling.
 // It loads accounts and creates scheduled sync tasks for each account.
 type SyncWorkerWithTaskmaster struct {
-	Config     *workerconfig.WorkerConfig
-	Store      store.AccountStore
-	Dispatcher taskmaster.FullDispatcher
-	Scheduler  *taskmaster.TaskScheduler
+	Config         *workerconfig.WorkerConfig
+	Store          store.AccountStore
+	Dispatcher     taskmaster.FullDispatcher
+	SyncService    *service.SyncService
+	SessionPool    *pool.IMAPSessionPool
+	Queue          envelopequeue.EnvelopeQueue
+	AccountService *service.AccountService
 }
 
 // NewSyncWorkerWithTaskmaster creates a new sync worker using taskmaster.
@@ -35,6 +41,40 @@ func NewSyncWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig) (*SyncWorkerWit
 		return nil, err
 	}
 
+	// Initialize envelope queue
+	queue, err := createQueue(cfg)
+	if err != nil {
+		accountStore.Close()
+		return nil, err
+	}
+
+	// Initialize IMAP session pool
+	sessionPool := pool.NewIMAPSessionPool(pool.DefaultSessionPoolConfig(), nil)
+
+	// Create account service
+	accountService, err := service.NewAccountService(
+		accountStore,
+		nil, // connPool - not needed for sync worker
+		sessionPool,
+		nil, // cache - not needed for sync worker
+		nil, // scheduler - not needed for sync worker
+		nil, // syncMgr - not needed, sync handled by workers
+		service.AccountServiceConfig{
+			EncryptionKey: cfg.Security.EncryptionKey,
+		},
+	)
+	if err != nil {
+		accountStore.Close()
+		queue.Close()
+		return nil, err
+	}
+
+	// Set account service in session pool
+	sessionPool.SetAccountService(accountService)
+
+	// Create sync service
+	syncService := service.NewSyncService(accountService, sessionPool, queue)
+
 	// Create dispatcher in managed mode (for local task execution)
 	dispatcher := taskmaster.NewDispatcher(
 		taskmaster.WithMode(taskmaster.ManagedMode),
@@ -43,20 +83,24 @@ func NewSyncWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig) (*SyncWorkerWit
 		taskmaster.WithQueueSize(100),
 	)
 
-	// Register the sync task
+	// Register the sync task with the sync service
 	syncTask := &workers.SyncTask{
-		// SyncService would be injected here in a real implementation
-		// For now, it will use the task's internal logic
+		SyncService: syncService,
 	}
 	if err := dispatcher.Register(syncTask); err != nil {
 		accountStore.Close()
+		queue.Close()
 		return nil, err
 	}
 
 	return &SyncWorkerWithTaskmaster{
-		Config:     cfg,
-		Store:      accountStore,
-		Dispatcher: dispatcher,
+		Config:         cfg,
+		Store:          accountStore,
+		Dispatcher:     dispatcher,
+		SyncService:    syncService,
+		SessionPool:    sessionPool,
+		Queue:          queue,
+		AccountService: accountService,
 	}, nil
 }
 
@@ -95,7 +139,7 @@ func (w *SyncWorkerWithTaskmaster) Start() error {
 		// Create sync task payload
 		payload := workers.SyncPayload{
 			AccountID: acc.ID,
-			Options: workers.SyncOptions{
+			Options: service.SyncOptions{
 				HistoricalScope:            30,
 				IncludeSpam:                acc.SyncSettings.IncludeSpam,
 				IncludeTrash:               acc.SyncSettings.IncludeTrash,
@@ -149,7 +193,10 @@ func (w *SyncWorkerWithTaskmaster) Stop() error {
 		log.Printf("Error stopping dispatcher: %v", err)
 	}
 
-	// Close store
+	// Close resources
+	if w.Queue != nil {
+		w.Queue.Close()
+	}
 	if w.Store != nil {
 		w.Store.Close()
 	}
@@ -158,7 +205,19 @@ func (w *SyncWorkerWithTaskmaster) Stop() error {
 	return nil
 }
 
-// Helper functions (copied from existing worker package)
+// Helper functions
+
+func createQueue(cfg *workerconfig.WorkerConfig) (envelopequeue.EnvelopeQueue, error) {
+	switch cfg.Queue.Type {
+	case "memory":
+		return envelopequeue.NewMemoryEnvelopeQueue(envelopequeue.DefaultMemoryEnvelopeQueueConfig()), nil
+	case "redis":
+		config := cfg.ToEnvelopeQueueConfig()
+		return envelopequeue.NewMachineryEnvelopeQueue(config)
+	default:
+		return envelopequeue.NewMemoryEnvelopeQueue(envelopequeue.DefaultMemoryEnvelopeQueueConfig()), nil
+	}
+}
 
 func createStore(cfg *workerconfig.WorkerConfig) (store.AccountStore, error) {
 	var accountStore store.AccountStore

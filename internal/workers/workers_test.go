@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"webmail_engine/internal/service"
 	"webmail_engine/internal/taskmaster"
 )
 
@@ -271,9 +272,9 @@ func TestSyncTaskID(t *testing.T) {
 
 // TestSyncTaskExecute tests task execution.
 func TestSyncTaskExecute(t *testing.T) {
-	service := &MockSyncService{
-		syncFunc: func(ctx context.Context, accountID string, opts SyncOptions) (*SyncResult, error) {
-			return &SyncResult{
+	syncService := &MockSyncService{
+		syncFunc: func(ctx context.Context, accountID string, opts service.SyncOptions) (*service.SyncResult, error) {
+			return &service.SyncResult{
 				AccountID:         accountID,
 				MessagesSynced:    10,
 				FoldersSynced:     3,
@@ -283,11 +284,11 @@ func TestSyncTaskExecute(t *testing.T) {
 		},
 	}
 
-	task := &SyncTask{SyncService: service}
+	task := &SyncTask{SyncService: syncService}
 
 	payload := SyncPayload{
 		AccountID: "acc_123",
-		Options: SyncOptions{
+		Options: service.SyncOptions{
 			HistoricalScope: 30,
 			FetchBody:       true,
 		},
@@ -303,26 +304,26 @@ func TestSyncTaskExecute(t *testing.T) {
 
 // MockSyncService is a test implementation.
 type MockSyncService struct {
-	syncFunc       func(ctx context.Context, accountID string, opts SyncOptions) (*SyncResult, error)
-	syncFolderFunc func(ctx context.Context, accountID, folderName string, opts SyncOptions) (*SyncResult, error)
+	syncFunc       func(ctx context.Context, accountID string, opts service.SyncOptions) (*service.SyncResult, error)
+	syncFolderFunc func(ctx context.Context, accountID, folderName string, opts service.SyncOptions) (*service.SyncResult, error)
 }
 
-func (m *MockSyncService) SyncAccount(ctx context.Context, accountID string, opts SyncOptions) (*SyncResult, error) {
+func (m *MockSyncService) SyncAccount(ctx context.Context, accountID string, opts service.SyncOptions) (*service.SyncResult, error) {
 	if m.syncFunc != nil {
 		return m.syncFunc(ctx, accountID, opts)
 	}
-	return &SyncResult{}, nil
+	return &service.SyncResult{}, nil
 }
 
-func (m *MockSyncService) SyncFolder(ctx context.Context, accountID, folderName string, opts SyncOptions) (*SyncResult, error) {
+func (m *MockSyncService) SyncFolder(ctx context.Context, accountID, folderName string, opts service.SyncOptions) (*service.SyncResult, error) {
 	if m.syncFolderFunc != nil {
 		return m.syncFolderFunc(ctx, accountID, folderName, opts)
 	}
-	return &SyncResult{}, nil
+	return &service.SyncResult{}, nil
 }
 
-func (m *MockSyncService) GetSyncState(ctx context.Context, accountID, folderName string) (*FolderSyncState, error) {
-	return &FolderSyncState{}, nil
+func (m *MockSyncService) GetSyncState(ctx context.Context, accountID, folderName string) (*service.FolderSyncState, error) {
+	return &service.FolderSyncState{}, nil
 }
 
 // TestEnvelopeProcessorTaskID tests the task ID.

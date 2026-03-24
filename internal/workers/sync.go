@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"webmail_engine/internal/service"
 	"webmail_engine/internal/taskmaster"
 )
 
@@ -17,69 +18,11 @@ type SyncTask struct {
 }
 
 // SyncService defines the interface for synchronization operations.
+// This matches the service.SyncService interface.
 type SyncService interface {
-	SyncAccount(ctx context.Context, accountID string, opts SyncOptions) (*SyncResult, error)
-	SyncFolder(ctx context.Context, accountID, folderName string, opts SyncOptions) (*SyncResult, error)
-	GetSyncState(ctx context.Context, accountID, folderName string) (*FolderSyncState, error)
-}
-
-// SyncOptions configures synchronization behavior.
-type SyncOptions struct {
-	// FullSync forces a complete re-sync of all messages
-	FullSync bool `json:"full_sync"`
-
-	// Folder limits sync to a specific folder (empty = all folders)
-	Folder string `json:"folder,omitempty"`
-
-	// HistoricalScope limits how far back to sync (days)
-	HistoricalScope int `json:"historical_scope"`
-
-	// IncludeSpam includes spam/junk folder
-	IncludeSpam bool `json:"include_spam"`
-
-	// IncludeTrash includes trash folder
-	IncludeTrash bool `json:"include_trash"`
-
-	// FetchBody determines whether to fetch message bodies
-	FetchBody bool `json:"fetch_body"`
-
-	// EnableLinkExtraction extracts links from message bodies
-	EnableLinkExtraction bool `json:"enable_link_extraction"`
-
-	// EnableAttachmentProcessing processes attachments
-	EnableAttachmentProcessing bool `json:"enable_attachment_processing"`
-}
-
-// SyncResult holds the result of a synchronization operation.
-type SyncResult struct {
-	// AccountID is the synchronized account
-	AccountID string `json:"account_id"`
-
-	// MessagesSynced is the number of new messages found
-	MessagesSynced int `json:"messages_synced"`
-
-	// FoldersSynced is the number of folders processed
-	FoldersSynced int `json:"folders_synced"`
-
-	// EnvelopesEnqueued is the number of messages enqueued for processing
-	EnvelopesEnqueued int `json:"envelopes_enqueued"`
-
-	// Duration is how long the sync took
-	Duration time.Duration `json:"duration"`
-
-	// Errors contains any non-fatal errors encountered
-	Errors []string `json:"errors,omitempty"`
-}
-
-// FolderSyncState holds the sync state for a folder.
-type FolderSyncState struct {
-	AccountID     string    `json:"account_id"`
-	FolderName    string    `json:"folder_name"`
-	UIDValidity   uint32    `json:"uid_validity"`
-	LastSyncedUID uint32    `json:"last_synced_uid"`
-	LastSyncTime  time.Time `json:"last_sync_time"`
-	MessageCount  int       `json:"message_count"`
-	IsInitialized bool      `json:"is_initialized"`
+	SyncAccount(ctx context.Context, accountID string, opts service.SyncOptions) (*service.SyncResult, error)
+	SyncFolder(ctx context.Context, accountID, folderName string, opts service.SyncOptions) (*service.SyncResult, error)
+	GetSyncState(ctx context.Context, accountID, folderName string) (*service.FolderSyncState, error)
 }
 
 // SyncPayload is the payload for sync tasks.
@@ -88,7 +31,7 @@ type SyncPayload struct {
 	AccountID string `json:"account_id"`
 
 	// Options configures the sync behavior
-	Options SyncOptions `json:"options,omitempty"`
+	Options service.SyncOptions `json:"options,omitempty"`
 
 	// Priority sets the sync priority (high, normal, low)
 	Priority string `json:"priority,omitempty"`
@@ -130,7 +73,7 @@ func (t *SyncTask) Execute(ctx context.Context, payload []byte) error {
 		req.AccountID, opts.FullSync, opts.Folder)
 
 	// Perform sync
-	var result *SyncResult
+	var result *service.SyncResult
 	var err error
 
 	if opts.Folder != "" {

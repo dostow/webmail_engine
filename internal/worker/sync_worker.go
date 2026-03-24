@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"webmail_engine/internal/envelopequeue"
 	"webmail_engine/internal/pool"
@@ -16,13 +15,15 @@ import (
 	"webmail_engine/internal/workerconfig"
 )
 
-// SyncWorker represents a running sync worker
+// SyncWorker represents a running sync worker using SyncService.
+// This worker loads accounts and performs immediate synchronization.
+// For scheduled sync, use sync_worker_taskmaster instead.
 type SyncWorker struct {
 	Config      *workerconfig.WorkerConfig
 	Queue       envelopequeue.EnvelopeQueue
 	Store       store.AccountStore
 	SessionPool *pool.IMAPSessionPool
-	SyncManager *service.SyncManager
+	SyncService *service.SyncService
 }
 
 // SyncWorkerOptions holds optional configuration for sync worker
@@ -32,7 +33,7 @@ type SyncWorkerOptions struct {
 	SessionPool *pool.IMAPSessionPool
 }
 
-// NewSyncWorker creates a new sync worker instance
+// NewSyncWorker creates a new sync worker instance using SyncService.
 func NewSyncWorker(cfg *workerconfig.WorkerConfig, opts *SyncWorkerOptions) (*SyncWorker, error) {
 	if opts == nil {
 		opts = &SyncWorkerOptions{}
@@ -93,23 +94,23 @@ func NewSyncWorker(cfg *workerconfig.WorkerConfig, opts *SyncWorkerOptions) (*Sy
 		sessionPool.SetAccountService(accountService)
 	}
 
-	// Create sync manager
-	syncMgr := service.NewSyncManagerForWorker(nil, accountService, sessionPool, queue)
+	// Create sync service
+	syncService := service.NewSyncService(accountService, sessionPool, queue)
 
 	return &SyncWorker{
 		Config:      cfg,
 		Queue:       queue,
 		Store:       accountStore,
 		SessionPool: sessionPool,
-		SyncManager: syncMgr,
+		SyncService: syncService,
 	}, nil
 }
 
-// Start starts the sync worker and loads accounts
+// Start starts the sync worker and performs one-time sync for all active accounts.
 func (w *SyncWorker) Start() error {
 	log.Printf("Starting sync worker (ID: %s, Queue: %s)", w.Config.WorkerID, w.Config.Queue.Type)
 
-	// Load and start sync for all active accounts
+	// Load and sync all active accounts
 	ctx := context.Background()
 	accounts, _, err := w.Store.List(ctx, 0, 0)
 	if err != nil {
@@ -117,27 +118,44 @@ func (w *SyncWorker) Start() error {
 	} else {
 		log.Printf("Loaded %d accounts", len(accounts))
 
+		syncCount := 0
 		for _, acc := range accounts {
-			if acc.Status == "active" && acc.SyncSettings.AutoSync {
-				interval := time.Duration(acc.SyncSettings.SyncInterval) * time.Second
-				if interval < 60*time.Second {
-					interval = 60 * time.Second
-				}
+			if acc.Status != "active" || !acc.SyncSettings.AutoSync {
+				continue
+			}
 
-				if err := w.SyncManager.StartSync(acc.ID, interval); err != nil {
-					log.Printf("Failed to start sync for account %s: %v", acc.ID, err)
-				} else {
-					log.Printf("Started sync for account %s (interval: %v)", acc.ID, interval)
-				}
+			// Perform one-time sync for this account
+			log.Printf("Starting sync for account %s...", acc.ID)
+
+			syncOpts := service.SyncOptions{
+				HistoricalScope:            30,
+				IncludeSpam:                acc.SyncSettings.IncludeSpam,
+				IncludeTrash:               acc.SyncSettings.IncludeTrash,
+				FetchBody:                  acc.SyncSettings.FetchBody,
+				EnableLinkExtraction:       acc.SyncSettings.EnableLinkExtraction,
+				EnableAttachmentProcessing: acc.SyncSettings.EnableAttachmentProcessing,
+			}
+
+			result, err := w.SyncService.SyncAccount(ctx, acc.ID, syncOpts)
+			if err != nil {
+				log.Printf("Sync failed for account %s: %v", acc.ID, err)
+			} else {
+				syncCount++
+				log.Printf("Sync completed for account %s: %d messages, %d folders, %d envelopes enqueued",
+					acc.ID, result.MessagesSynced, result.FoldersSynced, result.EnvelopesEnqueued)
 			}
 		}
+
+		log.Printf("Sync completed for %d/%d accounts", syncCount, len(accounts))
 	}
 
 	log.Println("Sync worker is running. Press Ctrl+C to stop.")
 	return nil
 }
 
-// Run starts the worker and blocks until shutdown signal
+// Run starts the worker and blocks until shutdown signal.
+// Note: This worker performs one-time sync on Start().
+// For continuous scheduled sync, use sync_worker_taskmaster instead.
 func (w *SyncWorker) Run() error {
 	// Set up signal handling
 	sigChan := make(chan os.Signal, 1)
@@ -149,15 +167,9 @@ func (w *SyncWorker) Run() error {
 	return w.Stop()
 }
 
-// Stop gracefully stops the sync worker
+// Stop gracefully stops the sync worker.
 func (w *SyncWorker) Stop() error {
 	log.Println("Shutting down sync worker...")
-
-	ctx, cancel := context.WithTimeout(context.Background(), w.Config.ShutdownTimeout)
-	defer cancel()
-
-	_ = ctx
-	w.SyncManager.StopAll()
 
 	if w.Queue != nil {
 		w.Queue.Close()

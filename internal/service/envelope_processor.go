@@ -619,9 +619,8 @@ func convertFlags(flags []string) []models.MessageFlag {
 
 // EnvelopeProcessingPipeline represents the complete envelope processing setup
 type EnvelopeProcessingPipeline struct {
-	Queue       envelopequeue.EnvelopeQueue
-	Processor   *EnvelopeProcessor
-	SyncManager *SyncManager
+	Queue     envelopequeue.EnvelopeQueue
+	Processor *EnvelopeProcessor
 }
 
 // EnvelopeProcessingPipelineConfig holds configuration for the complete pipeline
@@ -641,7 +640,7 @@ func DefaultPipelineConfig() *EnvelopeProcessingPipelineConfig {
 }
 
 // NewEnvelopeProcessingPipeline creates a complete envelope processing pipeline
-// This wires together the queue, processor, and sync manager
+// This wires together the queue and processor
 func NewEnvelopeProcessingPipeline(
 	messageService *MessageService,
 	accountService *AccountService,
@@ -681,13 +680,9 @@ func NewEnvelopeProcessingPipeline(
 		return nil, fmt.Errorf("failed to create envelope processor: %w", err)
 	}
 
-	// Create sync manager with queue integration
-	syncMgr := NewSyncManager(messageService, accountService, sessions, queue)
-
 	return &EnvelopeProcessingPipeline{
-		Queue:       queue,
-		Processor:   processor,
-		SyncManager: syncMgr,
+		Queue:     queue,
+		Processor: processor,
 	}, nil
 }
 

@@ -37,6 +37,8 @@ func main() {
 			Driver: *storeDriver,
 			DSN:    *storeDSN,
 		}
+		// Expand environment variables in config values
+		config.ExpandEnvVars(cfg)
 	}
 
 	// Create and run sync worker

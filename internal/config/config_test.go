@@ -16,7 +16,7 @@ func TestExpandEnvVars_StringFields(t *testing.T) {
 		},
 	}
 
-	expandEnvVars(cfg)
+	ExpandEnvVars(cfg)
 
 	if cfg.Server.Host != "expanded_value" {
 		t.Errorf("expected 'expanded_value', got '%s'", cfg.Server.Host)
@@ -32,7 +32,7 @@ func TestExpandEnvVars_WithDefault(t *testing.T) {
 		},
 	}
 
-	expandEnvVars(cfg)
+	ExpandEnvVars(cfg)
 
 	if cfg.Server.Host != "default_host" {
 		t.Errorf("expected 'default_host', got '%s'", cfg.Server.Host)
@@ -49,7 +49,7 @@ func TestExpandEnvVars_WithDefault_VarExists(t *testing.T) {
 		},
 	}
 
-	expandEnvVars(cfg)
+	ExpandEnvVars(cfg)
 
 	if cfg.Server.Host != "existing_value" {
 		t.Errorf("expected 'existing_value', got '%s'", cfg.Server.Host)
@@ -70,7 +70,7 @@ func TestExpandEnvVars_NestedStruct(t *testing.T) {
 		},
 	}
 
-	expandEnvVars(cfg)
+	ExpandEnvVars(cfg)
 
 	if cfg.Store.SQL.DSN != "postgres://user:pass@localhost:5432/db" {
 		t.Errorf("expected postgres DSN, got '%s'", cfg.Store.SQL.DSN)
@@ -89,7 +89,7 @@ func TestExpandEnvVars_Slice(t *testing.T) {
 		},
 	}
 
-	expandEnvVars(cfg)
+	ExpandEnvVars(cfg)
 
 	if len(cfg.Security.AllowedOrigins) != 2 {
 		t.Fatalf("expected 2 origins, got %d", len(cfg.Security.AllowedOrigins))
@@ -117,7 +117,7 @@ func TestExpandEnvVars_Map(t *testing.T) {
 		},
 	}
 
-	expandEnvVars(cfg)
+	ExpandEnvVars(cfg)
 
 	// Map values are ints, so no expansion happens, but function should not panic
 	if cfg.Scheduler.OperationCosts["FETCH"] != 1 {
@@ -139,7 +139,7 @@ func TestExpandEnvVars_MultipleInString(t *testing.T) {
 		},
 	}
 
-	expandEnvVars(cfg)
+	ExpandEnvVars(cfg)
 
 	expected := "postgres://admin:secret@localhost:5432/db"
 	if cfg.Store.SQL.DSN != expected {
@@ -155,7 +155,7 @@ func TestExpandEnvVars_NoExpansion(t *testing.T) {
 		},
 	}
 
-	expandEnvVars(cfg)
+	ExpandEnvVars(cfg)
 
 	if cfg.Server.Host != "localhost" {
 		t.Errorf("expected 'localhost', got '%s'", cfg.Server.Host)
@@ -175,7 +175,7 @@ func TestExpandEnvVars_EmptyVar(t *testing.T) {
 		},
 	}
 
-	expandEnvVars(cfg)
+	ExpandEnvVars(cfg)
 
 	if cfg.Server.Host != "" {
 		t.Errorf("expected empty string, got '%s'", cfg.Server.Host)
@@ -198,7 +198,7 @@ func TestExpandEnvVars_SecurityFields(t *testing.T) {
 		},
 	}
 
-	expandEnvVars(cfg)
+	ExpandEnvVars(cfg)
 
 	if cfg.Security.EncryptionKey != "9b532b632f684efbd7b1a60ae4ca727a8fd2def25f704fdeb4364d6f944f9087" {
 		t.Errorf("encryption key not expanded")
@@ -221,7 +221,7 @@ func TestExpandEnvVars_DurationFields(t *testing.T) {
 		},
 	}
 
-	expandEnvVars(cfg)
+	ExpandEnvVars(cfg)
 
 	if cfg.Server.ReadTimeout != 30*time.Second {
 		t.Errorf("expected 30s read timeout, got %v", cfg.Server.ReadTimeout)

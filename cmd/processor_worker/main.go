@@ -49,6 +49,8 @@ func main() {
 			CleanupAge:      24 * time.Hour,
 			TempStoragePath: *attachmentPath,
 		}
+		// Expand environment variables in config values
+		config.ExpandEnvVars(cfg)
 	}
 
 	// Create and run processor worker

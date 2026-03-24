@@ -251,7 +251,7 @@ func LoadFromFile(path string) (*Config, error) {
 	}
 
 	// Expand environment variables in config values
-	expandEnvVars(config)
+	ExpandEnvVars(config)
 
 	return config, nil
 }
@@ -357,8 +357,9 @@ func (c *Config) SaveToFile(path string) error {
 	return nil
 }
 
-// expandEnvVars recursively expands environment variables in all string fields
-func expandEnvVars(cfg interface{}) {
+// ExpandEnvVars recursively expands environment variables in all string fields
+// Supports: ${VAR}, $VAR, ${VAR:-default}
+func ExpandEnvVars(cfg interface{}) {
 	v := reflect.ValueOf(cfg)
 	if v.Kind() != reflect.Ptr || v.IsNil() {
 		return

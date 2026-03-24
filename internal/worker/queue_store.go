@@ -27,17 +27,36 @@ func createQueue(cfg *workerconfig.WorkerConfig) (envelopequeue.EnvelopeQueue, e
 // createStore creates the account store based on configuration
 func createStore(cfg *workerconfig.WorkerConfig) (store.AccountStore, error) {
 	switch cfg.Store.Type {
-	case "sqlite", "postgres", "":
-		log.Printf("Using SQLite store at %s", cfg.Store.SQL.DSN)
+	case "sql", "":
+		// For "sql" type, determine the actual driver from the SQL config
+		if cfg.Store.SQL == nil {
+			return nil, fmt.Errorf("SQL config is required for store type: sql")
+		}
+		log.Printf("Using SQL store (%s) at %s", cfg.Store.SQL.Driver, cfg.Store.SQL.DSN)
 		return store.NewSQLStore(config.SQLConfig{
+			Driver:         cfg.Store.SQL.Driver,
 			DSN:            cfg.Store.SQL.DSN,
 			MaxConnections: cfg.Store.SQL.MaxConnections,
+			MinIdle:        cfg.Store.SQL.MinIdle,
+			BusyTimeoutMs:  cfg.Store.SQL.BusyTimeoutMs,
+		})
+	case "sqlite", "postgres":
+		// Direct driver specification (deprecated, but supported for backwards compatibility)
+		if cfg.Store.SQL == nil {
+			return nil, fmt.Errorf("SQL config is required for store type: %s", cfg.Store.Type)
+		}
+		log.Printf("Using SQL store (%s) at %s", cfg.Store.SQL.Driver, cfg.Store.SQL.DSN)
+		return store.NewSQLStore(config.SQLConfig{
+			Driver:         cfg.Store.SQL.Driver,
+			DSN:            cfg.Store.SQL.DSN,
+			MaxConnections: cfg.Store.SQL.MaxConnections,
+			MinIdle:        cfg.Store.SQL.MinIdle,
 			BusyTimeoutMs:  cfg.Store.SQL.BusyTimeoutMs,
 		})
 	case "memory":
 		log.Println("Using in-memory store (data will not persist)")
 		return store.NewMemoryStore(), nil
 	default:
-		return nil, fmt.Errorf("unknown store type: %s (supported: sqlite, postgres, memory)", cfg.Store.Type)
+		return nil, fmt.Errorf("unknown store type: %s (supported: sql, sqlite, postgres, memory)", cfg.Store.Type)
 	}
 }

@@ -14,8 +14,8 @@ import (
 
 // MockAccountStore provides in-memory account storage for tests
 type MockAccountStore struct {
-	accounts   map[string]*models.Account
-	auditLogs  []*models.AuditLog
+	accounts  map[string]*models.Account
+	auditLogs []*models.AuditLog
 }
 
 func NewMockAccountStore() *MockAccountStore {
@@ -122,7 +122,7 @@ func TestSendService_NewSendService(t *testing.T) {
 	sched := scheduler.NewFairUseScheduler()
 	defer sched.Shutdown()
 	accountStore := NewMockAccountStore()
-	storage := storage.NewAttachmentStorage("")
+	storage := storage.NewFileAttachmentStorage("")
 
 	service, err := NewSendService(nil, sched, storage, accountStore, "12345678901234567890123456789012", SendServiceConfig{
 		MaxRetries:      3,

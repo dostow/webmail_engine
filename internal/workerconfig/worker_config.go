@@ -76,6 +76,9 @@ func LoadWorkerConfig(path string) (*WorkerConfig, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	// Expand environment variables in config values
+	config.ExpandEnvVars(cfg)
+
 	return cfg, nil
 }
 

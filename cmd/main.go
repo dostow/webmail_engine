@@ -133,7 +133,6 @@ func main() {
 		imapSessionPool,
 		memCache,
 		fairUseScheduler,
-		nil, // syncMgr - nil since sync runs externally
 		service.AccountServiceConfig{
 			EncryptionKey: cfg.Security.EncryptionKey,
 		},

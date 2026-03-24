@@ -26,7 +26,6 @@ type AccountService struct {
 	sessions  *pool.IMAPSessionPool
 	cache     *cache.Cache
 	scheduler *scheduler.FairUseScheduler
-	syncMgr   *SyncManager
 	encryptor *crypto.Encryptor
 }
 
@@ -43,7 +42,6 @@ func NewAccountService(
 	sessions *pool.IMAPSessionPool,
 	cache *cache.Cache,
 	scheduler *scheduler.FairUseScheduler,
-	syncMgr *SyncManager,
 	config AccountServiceConfig,
 ) (*AccountService, error) {
 	encryptor, err := crypto.NewEncryptor(config.EncryptionKey)
@@ -57,16 +55,8 @@ func NewAccountService(
 		sessions:  sessions,
 		cache:     cache,
 		scheduler: scheduler,
-		syncMgr:   syncMgr,
 		encryptor: encryptor,
 	}, nil
-}
-
-// SetSyncManager sets the sync manager (for circular dependency)
-func (s *AccountService) SetSyncManager(syncMgr *SyncManager) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.syncMgr = syncMgr
 }
 
 // SetStore sets the account store (for worker use)
@@ -165,10 +155,8 @@ func (s *AccountService) AddAccount(ctx context.Context, req models.AddAccountRe
 		return nil, fmt.Errorf("failed to store account: %w", err)
 	}
 
-	// Start background sync if enabled
-	if s.syncMgr != nil {
-		s.syncMgr.StartSyncForNewAccount(accountID, req.SyncSettings)
-	}
+	// Note: Background sync is now handled by sync_worker_taskmaster
+	// The sync worker creates scheduled tasks for each account via taskmaster
 
 	// Don't cache the full account with encrypted password
 	// The cache is only for stripped accounts used in API responses
@@ -178,7 +166,7 @@ func (s *AccountService) AddAccount(ctx context.Context, req models.AddAccountRe
 		AccountID:             accountID,
 		Status:                account.Status,
 		ConnectionEstablished: true,
-		InitialSyncStatus:     "started",
+		InitialSyncStatus:     "pending",
 		InitialSyncProgress:   0,
 		MessageCount:          0,
 		ResourceAllocation: models.ResourceStatus{
@@ -256,11 +244,8 @@ func (s *AccountService) updateAccountConfig(ctx context.Context, acc *models.Ac
 
 	// Fair-use scheduling will be lazily reinitialized on next operation
 
-	// Restart sync if enabled
-	if s.syncMgr != nil {
-		s.syncMgr.StopSync(acc.ID)
-		s.syncMgr.StartSyncForNewAccount(acc.ID, req.SyncSettings)
-	}
+	// Note: Background sync is now handled by sync_worker_taskmaster
+	// Sync will be restarted automatically by the sync worker based on account settings
 
 	// Invalidate cache to ensure UI gets updated status
 	s.cache.InvalidateAccount(ctx, acc.ID)
@@ -664,21 +649,10 @@ func (s *AccountService) UpdateAccount(ctx context.Context, accountID string, up
 	}
 
 	// Handle sync settings changes
-	if syncSettingsChanged && s.syncMgr != nil {
-		// Stop existing sync
-		s.syncMgr.StopSync(accountID)
-
-		// Start new sync if enabled
-		if account.SyncSettings.AutoSync {
-			interval := time.Duration(account.SyncSettings.SyncInterval) * time.Second
-			if interval < 60*time.Second {
-				interval = 60 * time.Second // Minimum 1 minute
-			}
-			s.syncMgr.StartSync(accountID, interval)
-			log.Printf("Restarted background sync for account %s (interval: %v)", accountID, interval)
-		} else {
-			log.Printf("Stopped background sync for account %s (auto_sync disabled)", accountID)
-		}
+	// Note: Sync is now handled by sync_worker_taskmaster
+	// The sync worker will pick up the changes on its next scheduling cycle
+	if syncSettingsChanged {
+		log.Printf("Sync settings changed for account %s, sync worker will apply changes", accountID)
 	}
 
 	// Invalidate cache so next GetAccount fetches fresh data
@@ -821,10 +795,8 @@ func (s *AccountService) DisableAccount(ctx context.Context, accountID string, r
 	// Close any active connections
 	s.pool.CloseAccount(accountID)
 
-	// Stop any running sync tasks
-	if s.syncMgr != nil {
-		s.syncMgr.StopSync(accountID)
-	}
+	// Note: Sync is now handled by sync_worker_taskmaster
+	// The sync worker will stop sync tasks for this account automatically
 
 	// Invalidate cache
 	s.cache.InvalidateAccount(ctx, accountID)

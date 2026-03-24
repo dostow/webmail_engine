@@ -79,7 +79,6 @@ func NewSyncWorker(cfg *workerconfig.WorkerConfig, opts *SyncWorkerOptions) (*Sy
 		sessionPool,
 		nil, // cache - not needed for sync worker
 		nil, // scheduler - not needed for sync worker
-		nil, // syncMgr - will be set later
 		service.AccountServiceConfig{
 			EncryptionKey: cfg.Security.EncryptionKey,
 		},

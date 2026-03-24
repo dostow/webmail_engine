@@ -111,7 +111,6 @@ func NewProcessorWorker(cfg *workerconfig.WorkerConfig, opts *ProcessorWorkerOpt
 		sessionPool,
 		memCache,
 		fairUseScheduler,
-		nil, // syncMgr - not needed for processor worker
 		service.AccountServiceConfig{
 			EncryptionKey: cfg.Security.EncryptionKey,
 		},

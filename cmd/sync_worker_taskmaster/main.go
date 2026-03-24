@@ -58,7 +58,6 @@ func NewSyncWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig) (*SyncWorkerWit
 		sessionPool,
 		nil, // cache - not needed for sync worker
 		nil, // scheduler - not needed for sync worker
-		nil, // syncMgr - not needed, sync handled by workers
 		service.AccountServiceConfig{
 			EncryptionKey: cfg.Security.EncryptionKey,
 		},

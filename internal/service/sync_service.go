@@ -454,3 +454,20 @@ type FolderSyncState struct {
 	MessageCount  uint32
 	IsInitialized bool
 }
+
+// Constants
+
+// initialSyncBatchLimit is the maximum number of messages fetched during initial sync.
+const initialSyncBatchLimit = 500
+
+// Helper functions
+
+// containsString checks if a string is in a slice.
+func containsString(slice []string, target string) bool {
+	for _, s := range slice {
+		if s == target {
+			return true
+		}
+	}
+	return false
+}

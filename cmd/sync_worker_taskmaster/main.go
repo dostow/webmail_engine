@@ -107,7 +107,7 @@ func NewSyncWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig, mode string) (*
 }
 
 // createDispatcher creates a taskmaster dispatcher with mode-specific configuration
-func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerConfig, modeStr string) taskmaster.FullDispatcher {
+func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerConfig, _ string) taskmaster.FullDispatcher {
 	switch mode {
 	case taskmaster.RESTMode:
 		return taskmaster.NewDispatcher(
@@ -238,7 +238,7 @@ func (w *SyncWorkerWithTaskmaster) startScheduledMode(ctx context.Context) error
 }
 
 // startRESTMode initializes REST-specific components (no account fetching).
-func (w *SyncWorkerWithTaskmaster) startRESTMode(ctx context.Context) error {
+func (w *SyncWorkerWithTaskmaster) startRESTMode(_ context.Context) error {
 	log.Println("REST mode: Account fetching disabled. Waiting for HTTP requests...")
 	log.Println("Endpoints:")
 	log.Println("  POST /api/v1/tasks/sync - Submit sync task")
@@ -248,7 +248,7 @@ func (w *SyncWorkerWithTaskmaster) startRESTMode(ctx context.Context) error {
 }
 
 // startMachineryMode initializes Machinery-specific components.
-func (w *SyncWorkerWithTaskmaster) startMachineryMode(ctx context.Context) error {
+func (w *SyncWorkerWithTaskmaster) startMachineryMode(_ context.Context) error {
 	log.Println("Machinery mode: Listening for incoming sync tasks from message queue...")
 	log.Printf("Broker: %s", w.Config.Queue.RedisURL)
 	// No account loading - tasks come from queue

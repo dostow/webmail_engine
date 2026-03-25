@@ -107,7 +107,7 @@ func (s *MessageService) isCacheValid(
 // at the front (for descending date-sort) or appends them (ascending).
 // Returns the merged UID list ready to be re-cached with the new modseq.
 func (s *MessageService) fetchIncrementalUpdates(
-	ctx context.Context,
+	_ context.Context,
 	client *pool.IMAPAdapter,
 	existingUIDs []uint32,
 	lastModSeq uint64,
@@ -165,8 +165,8 @@ func (s *MessageService) handleSortFailure(
 	accountID string,
 	imapConfig pool.IMAPConfig,
 	release func(),
-	sortBy models.SortField,
-	sortOrder models.SortOrder,
+	_ models.SortField,
+	_ models.SortOrder,
 	sortErr error,
 ) ([]uint32, error) {
 	// Check if connection is dead - get fresh connection before fallback

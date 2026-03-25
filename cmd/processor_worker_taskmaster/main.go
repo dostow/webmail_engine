@@ -81,7 +81,7 @@ func NewProcessorWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig, mode strin
 	}, nil
 }
 
-func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerConfig, modeStr string) taskmaster.FullDispatcher {
+func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerConfig, _ string) taskmaster.FullDispatcher {
 	switch mode {
 	case taskmaster.RESTMode:
 		return taskmaster.NewDispatcher(
@@ -147,12 +147,12 @@ func (w *ProcessorWorkerWithTaskmaster) Start() error {
 	}
 }
 
-func (w *ProcessorWorkerWithTaskmaster) startManagedMode(ctx context.Context) error {
+func (w *ProcessorWorkerWithTaskmaster) startManagedMode(_ context.Context) error {
 	log.Println("Processor worker running - waiting for envelope_processor tasks...")
 	return nil
 }
 
-func (w *ProcessorWorkerWithTaskmaster) startRESTMode(ctx context.Context) error {
+func (w *ProcessorWorkerWithTaskmaster) startRESTMode(_ context.Context) error {
 	log.Println("REST mode: Waiting for HTTP task submissions...")
 	log.Println("Endpoints:")
 	log.Println("  POST /api/v1/tasks/envelope_processor - Submit task")
@@ -160,7 +160,7 @@ func (w *ProcessorWorkerWithTaskmaster) startRESTMode(ctx context.Context) error
 	return nil
 }
 
-func (w *ProcessorWorkerWithTaskmaster) startMachineryMode(ctx context.Context) error {
+func (w *ProcessorWorkerWithTaskmaster) startMachineryMode(_ context.Context) error {
 	log.Println("Machinery mode: Listening for tasks from queue...")
 	log.Printf("Broker: %s", w.Config.Queue.RedisURL)
 	return nil

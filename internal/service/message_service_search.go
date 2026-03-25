@@ -14,9 +14,9 @@ import (
 // searchByDateRange performs date-filtered search for large mailboxes
 // Returns UIDs from recent messages only (configurable time window)
 func (s *MessageService) searchByDateRange(
-	ctx context.Context,
+	_ context.Context,
 	client *pool.IMAPAdapter,
-	folder string,
+	_ string,
 	sortBy models.SortField,
 	sortOrder models.SortOrder,
 	days int,

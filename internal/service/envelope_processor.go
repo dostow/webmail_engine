@@ -370,7 +370,7 @@ func (p *EnvelopeProcessor) executeProcessing(envelope *models.EnvelopeQueueItem
 
 // storeAndProcessMessage stores the message and performs post-processing
 func (p *EnvelopeProcessor) storeAndProcessMessage(
-	ctx context.Context,
+	_ context.Context,
 	envelope *models.EnvelopeQueueItem,
 	account *models.Account,
 	fetchedEnvelope *pool.MessageEnvelope,
@@ -422,7 +422,7 @@ func (p *EnvelopeProcessor) storeAndProcessMessage(
 func (p *EnvelopeProcessor) convertToMessage(
 	envelope *models.EnvelopeQueueItem,
 	fetched *pool.MessageEnvelope,
-	accountID string,
+	_ string,
 ) *models.Message {
 	// Generate thread ID from message ID or references
 	threadID := generateThreadID(fetched.MessageID, []string{})
@@ -724,15 +724,15 @@ func (p *EnvelopeProcessingPipeline) GetPipelineStats() (*PipelineStats, error) 
 		return nil, err
 	}
 
-	// Snapshots are already copies, so we can assign them directly
+	// Return pointers to avoid copying mutexes
 	return &PipelineStats{
-		ProcessorStats: *processorStats,
-		QueueStats:     *queueStats,
+		ProcessorStats: processorStats,
+		QueueStats:     queueStats,
 	}, nil
 }
 
 // PipelineStats holds statistics for the entire processing pipeline
 type PipelineStats struct {
-	ProcessorStats ProcessorStats                   `json:"processor_stats"`
-	QueueStats     envelopequeue.EnvelopeQueueStats `json:"queue_stats"`
+	ProcessorStats *ProcessorStats                   `json:"processor_stats"`
+	QueueStats     *envelopequeue.EnvelopeQueueStats `json:"queue_stats"`
 }

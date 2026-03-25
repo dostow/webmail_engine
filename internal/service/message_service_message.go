@@ -538,12 +538,9 @@ UseUIDs:
 		// Note: nil check is critical - nil means error/invalid
 		// Empty Messages slice (len=0) is valid and SHOULD be cached
 		// This handles: empty folder, all messages deleted, empty page (e.g., page 10 of 5)
-		if messageList == nil {
-			log.Printf("Skipping message list cache write: messageList is nil for folder %s, page %d", folder, cursorData.Page+1)
-		} else {
-			if err := s.messageListCache.Set(ctx, cacheKey, messageList, highestModSeq); err != nil {
-				log.Printf("Warning: failed to cache message list: %v", err)
-			}
+
+		if err := s.messageListCache.Set(ctx, cacheKey, messageList, highestModSeq); err != nil {
+			log.Printf("Warning: failed to cache message list: %v", err)
 		}
 	}
 

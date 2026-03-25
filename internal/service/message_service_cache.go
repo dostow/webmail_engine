@@ -136,7 +136,7 @@ func (s *MessageService) buildMessageCacheKey(accountID, folder, uid string) str
 // Returns the message and any missing attachments if found via content-based deduplication
 func (s *MessageService) getCachedMessageByContent(
 	ctx context.Context,
-	accountID string,
+	_ string,
 	msg *models.Message,
 ) (*models.Message, []models.Attachment, error) {
 	if s.cache == nil {

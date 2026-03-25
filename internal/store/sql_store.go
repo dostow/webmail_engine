@@ -14,6 +14,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"webmail_engine/internal/config"
 	"webmail_engine/internal/models"
@@ -780,8 +781,11 @@ func (s *SQLStore) UpsertFolderSyncState(ctx context.Context, state *models.Fold
 	var dbState folderSyncStateDB
 	dbState.fromFolderSyncState(state)
 
-	// Use Save for upsert behavior (update on conflict)
-	if err := s.db.WithContext(ctx).Save(&dbState).Error; err != nil {
+	// Use explicit upsert with ON CONFLICT clause for proper composite primary key handling
+	if err := s.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "account_id"}, {Name: "folder_name"}},
+		DoUpdates: clause.AssignmentColumns([]string{"uid_validity", "last_synced_uid", "last_sync_time", "message_count", "is_initialized", "updated_at"}),
+	}).Create(&dbState).Error; err != nil {
 		return fmt.Errorf("failed to upsert folder sync state: %w", err)
 	}
 

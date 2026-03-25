@@ -269,7 +269,7 @@ func (s *SyncService) initialSyncFolder(ctx context.Context, accountID string, c
 	}
 
 	log.Printf("Initial sync fetching %d UIDs for %s/%s", len(uids), accountID, folderName)
-	return s.enqueueEnvelopes(ctx, accountID, folderName, uids, client, opts)
+	return s.enqueueEnvelopes(ctx, accountID, folderName, uids, client, opts, status)
 }
 
 // syncUIDRange fetches messages in a UID range and enqueues envelopes.
@@ -291,11 +291,11 @@ func (s *SyncService) syncUIDRange(ctx context.Context, accountID string, client
 		uids = uids[:maxUIDsPerSync]
 	}
 
-	return s.enqueueEnvelopes(ctx, accountID, folderName, uids, client, opts)
+	return s.enqueueEnvelopes(ctx, accountID, folderName, uids, client, opts, status)
 }
 
 // enqueueEnvelopes fetches envelopes and enqueues them for processing.
-func (s *SyncService) enqueueEnvelopes(ctx context.Context, accountID, folderName string, uids []uint32, client *pool.IMAPAdapter, opts SyncOptions) (int, error) {
+func (s *SyncService) enqueueEnvelopes(ctx context.Context, accountID, folderName string, uids []uint32, client *pool.IMAPAdapter, opts SyncOptions, status *pool.FolderStatus) (int, error) {
 	count := 0
 	enqueued := 0
 
@@ -330,7 +330,7 @@ func (s *SyncService) enqueueEnvelopes(ctx context.Context, accountID, folderNam
 	log.Printf("Enqueued %d/%d envelopes for processing from %s/%s",
 		enqueued, count, accountID, folderName)
 
-	return s.updateFolderSyncState(ctx, accountID, folderName, nil, count)
+	return s.updateFolderSyncState(ctx, accountID, folderName, status, count)
 }
 
 // enqueueEnvelope creates a queue item from an envelope and adds it to the processing queue.

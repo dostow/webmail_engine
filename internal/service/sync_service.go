@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"time"
 
 	"webmail_engine/internal/envelopequeue"
@@ -11,6 +12,23 @@ import (
 	"webmail_engine/internal/pool"
 	"webmail_engine/internal/store"
 )
+
+// Constants for sync service configuration
+
+// initialSyncBatchLimit is the maximum number of messages fetched during initial sync.
+const initialSyncBatchLimit = 500
+
+// envelopeBatchSize is the number of messages fetched per batch during sync.
+const envelopeBatchSize = 50
+
+// defaultMaxRetries is the default number of retries for envelope processing.
+const defaultMaxRetries = 3
+
+// messagesPerDayEstimate is the estimated number of messages per day for historical scope calculations.
+const messagesPerDayEstimate = 30
+
+// maxUIDsPerSync is the maximum number of UIDs to process in a single sync operation.
+const maxUIDsPerSync = 10000
 
 // SyncService handles email synchronization operations.
 // It provides methods for syncing accounts and folders, and managing sync state.
@@ -35,6 +53,16 @@ func NewSyncService(
 
 // SyncAccount performs synchronization for an entire account.
 func (s *SyncService) SyncAccount(ctx context.Context, accountID string, opts SyncOptions) (*SyncResult, error) {
+	start := time.Now()
+	result := &SyncResult{AccountID: accountID}
+
+	// Apply timeout if configured
+	if opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
+		defer cancel()
+	}
+
 	// Get account with credentials
 	account, err := s.accountService.GetAccountWithCredentials(ctx, accountID)
 	if err != nil {
@@ -61,10 +89,10 @@ func (s *SyncService) SyncAccount(ctx context.Context, accountID string, opts Sy
 	// Sync each folder
 	for _, folder := range folders {
 		// Skip spam/trash if configured
-		if !opts.IncludeSpam && containsString(folder.Attributes, "\\Junk") {
+		if !opts.IncludeSpam && slices.Contains(folder.Attributes, "\\Junk") {
 			continue
 		}
-		if !opts.IncludeTrash && containsString(folder.Attributes, "\\Trash") {
+		if !opts.IncludeTrash && slices.Contains(folder.Attributes, "\\Trash") {
 			continue
 		}
 
@@ -78,17 +106,26 @@ func (s *SyncService) SyncAccount(ctx context.Context, accountID string, opts Sy
 		envelopesEnqueued += count
 	}
 
-	return &SyncResult{
-		AccountID:         accountID,
-		MessagesSynced:    totalSynced,
-		FoldersSynced:     len(folders),
-		EnvelopesEnqueued: envelopesEnqueued,
-		Errors:            errors,
-	}, nil
+	result.MessagesSynced = totalSynced
+	result.FoldersSynced = len(folders)
+	result.EnvelopesEnqueued = envelopesEnqueued
+	result.Errors = errors
+	result.Duration = time.Since(start)
+
+	return result, nil
 }
 
 // SyncFolder performs synchronization for a specific folder.
 func (s *SyncService) SyncFolder(ctx context.Context, accountID, folderName string, opts SyncOptions) (*SyncResult, error) {
+	start := time.Now()
+
+	// Apply timeout if configured
+	if opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
+		defer cancel()
+	}
+
 	// Get account with credentials
 	account, err := s.accountService.GetAccountWithCredentials(ctx, accountID)
 	if err != nil {
@@ -113,6 +150,7 @@ func (s *SyncService) SyncFolder(ctx context.Context, accountID, folderName stri
 		MessagesSynced:    count,
 		FoldersSynced:     1,
 		EnvelopesEnqueued: count,
+		Duration:          time.Since(start),
 	}, nil
 }
 
@@ -205,11 +243,12 @@ func (s *SyncService) initialSyncFolder(ctx context.Context, accountID string, c
 	}
 
 	// Calculate limit based on historical scope
+	// Uses messagesPerDayEstimate (~30 msgs/day) as a rough heuristic
 	historicalDays := opts.HistoricalScope
 	if historicalDays <= 0 {
 		historicalDays = 30
 	}
-	limit := historicalDays * 30 // rough heuristic: 30 msgs/day
+	limit := historicalDays * messagesPerDayEstimate
 	if limit > initialSyncBatchLimit {
 		limit = initialSyncBatchLimit
 	}
@@ -246,17 +285,22 @@ func (s *SyncService) syncUIDRange(ctx context.Context, accountID string, client
 		return s.updateFolderSyncState(ctx, accountID, folderName, status, 0)
 	}
 
+	// Limit UIDs to prevent memory issues with very large folders
+	if len(uids) > maxUIDsPerSync {
+		log.Printf("Limiting UID batch from %d to %d for %s/%s", len(uids), maxUIDsPerSync, accountID, folderName)
+		uids = uids[:maxUIDsPerSync]
+	}
+
 	return s.enqueueEnvelopes(ctx, accountID, folderName, uids, client, opts)
 }
 
 // enqueueEnvelopes fetches envelopes and enqueues them for processing.
 func (s *SyncService) enqueueEnvelopes(ctx context.Context, accountID, folderName string, uids []uint32, client *pool.IMAPAdapter, opts SyncOptions) (int, error) {
-	batchSize := 50
 	count := 0
 	enqueued := 0
 
-	for i := 0; i < len(uids); i += batchSize {
-		end := i + batchSize
+	for i := 0; i < len(uids); i += envelopeBatchSize {
+		end := i + envelopeBatchSize
 		if end > len(uids) {
 			end = len(uids)
 		}
@@ -264,7 +308,11 @@ func (s *SyncService) enqueueEnvelopes(ctx context.Context, accountID, folderNam
 		batch := uids[i:end]
 		envelopes, err := client.FetchMessages(batch, opts.FetchBody)
 		if err != nil {
-			log.Printf("Failed to fetch batch %d-%d in %s/%s: %v", batch[0], batch[len(batch)-1], accountID, folderName, err)
+			if len(batch) >= 2 {
+				log.Printf("Failed to fetch batch %d-%d in %s/%s: %v", batch[0], batch[len(batch)-1], accountID, folderName, err)
+			} else if len(batch) == 1 {
+				log.Printf("Failed to fetch UID %d in %s/%s: %v", batch[0], accountID, folderName, err)
+			}
 			continue
 		}
 
@@ -310,12 +358,12 @@ func (s *SyncService) enqueueEnvelope(ctx context.Context, accountID, folderName
 		Size:       env.Size,
 		Priority:   priority,
 		Status:     models.EnvelopeStatusPending,
-		MaxRetries: 3,
+		MaxRetries: defaultMaxRetries,
 	}
 
 	queueOpts := &envelopequeue.EnqueueOptions{
 		Priority:   priority,
-		MaxRetries: 3,
+		MaxRetries: defaultMaxRetries,
 	}
 
 	return s.queue.Enqueue(ctx, queueItem, queueOpts)
@@ -331,6 +379,7 @@ func (s *SyncService) determineEnvelopePriority(folderName string, env *pool.Mes
 	for _, flag := range env.Flags {
 		if flag == "\\Seen" {
 			isUnseen = false
+			break // Early exit - no need to check remaining flags
 		}
 		if flag == "\\Flagged" {
 			isFlagged = true
@@ -369,8 +418,16 @@ func (s *SyncService) updateFolderSyncState(ctx context.Context, accountID, fold
 		// Get existing state and update it
 		existing, err := s.accountService.GetFolderSyncState(ctx, accountID, folderName)
 		if err == nil && existing != nil {
-			state = existing
-			state.LastSyncTime = time.Now()
+			// Create a copy to avoid mutating the cached state
+			state = &models.FolderSyncState{
+				AccountID:     existing.AccountID,
+				FolderName:    existing.FolderName,
+				UIDValidity:   existing.UIDValidity,
+				LastSyncedUID: existing.LastSyncedUID,
+				LastSyncTime:  time.Now(),
+				MessageCount:  existing.MessageCount,
+				IsInitialized: existing.IsInitialized,
+			}
 		}
 	}
 
@@ -405,7 +462,11 @@ type SyncOptions struct {
 	// Folder limits sync to a specific folder (empty = all folders)
 	Folder string
 
-	// HistoricalScope limits how far back to sync (days)
+	// HistoricalScope limits how far back to sync (days).
+	// During initial sync, this is used to estimate the number of messages to fetch
+	// using a heuristic of ~30 messages per day. For example, a scope of 30 days
+	// would fetch approximately 900 messages (capped at initialSyncBatchLimit).
+	// Default is 30 days if not specified.
 	HistoricalScope int
 
 	// IncludeSpam includes spam/junk folder
@@ -422,6 +483,10 @@ type SyncOptions struct {
 
 	// EnableAttachmentProcessing processes attachments
 	EnableAttachmentProcessing bool
+
+	// Timeout sets a maximum duration for the sync operation.
+	// If zero, no timeout is applied.
+	Timeout time.Duration
 }
 
 // SyncResult holds the result of a synchronization operation.
@@ -453,21 +518,4 @@ type FolderSyncState struct {
 	LastSyncTime  time.Time
 	MessageCount  uint32
 	IsInitialized bool
-}
-
-// Constants
-
-// initialSyncBatchLimit is the maximum number of messages fetched during initial sync.
-const initialSyncBatchLimit = 500
-
-// Helper functions
-
-// containsString checks if a string is in a slice.
-func containsString(slice []string, target string) bool {
-	for _, s := range slice {
-		if s == target {
-			return true
-		}
-	}
-	return false
 }

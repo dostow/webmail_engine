@@ -90,6 +90,34 @@ func (m *MockAccountStore) ListAuditLogs(ctx context.Context, offset, limit int)
 	return m.auditLogs, len(m.auditLogs), nil
 }
 
+func (m *MockAccountStore) GetFolderSyncState(ctx context.Context, accountID, folderName string) (*models.FolderSyncState, error) {
+	return nil, store.ErrNotFound
+}
+
+func (m *MockAccountStore) UpsertFolderSyncState(ctx context.Context, state *models.FolderSyncState) error {
+	return nil
+}
+
+func (m *MockAccountStore) DeleteFolderSyncState(ctx context.Context, accountID, folderName string) error {
+	return nil
+}
+
+func (m *MockAccountStore) ListFolderSyncStates(ctx context.Context, accountID string) ([]*models.FolderSyncState, error) {
+	return []*models.FolderSyncState{}, nil
+}
+
+func (m *MockAccountStore) GetAccountProcessorConfigs(ctx context.Context, accountID string) ([]models.AccountProcessorConfig, error) {
+	return []models.AccountProcessorConfig{}, nil
+}
+
+func (m *MockAccountStore) UpdateAccountProcessorConfigs(ctx context.Context, accountID string, configs []models.AccountProcessorConfig) error {
+	return nil
+}
+
+func (m *MockAccountStore) EnableAccountProcessor(ctx context.Context, accountID, processorType string, enabled bool) error {
+	return nil
+}
+
 // Helper function to create test account
 func createTestAccount(id string) *models.Account {
 	return &models.Account{
@@ -150,7 +178,7 @@ func TestSendService_NewSendService_InvalidKey(t *testing.T) {
 	sched := scheduler.NewFairUseScheduler()
 	defer sched.Shutdown()
 	accountStore := NewMockAccountStore()
-	storage := storage.NewAttachmentStorage("")
+	storage := storage.NewFileAttachmentStorage("")
 
 	// Invalid key (too short)
 	_, err := NewSendService(nil, sched, storage, accountStore, "short", SendServiceConfig{})
@@ -183,7 +211,7 @@ func TestSendService_SendEmail_InsufficientTokens(t *testing.T) {
 		OperationCosts:  scheduler.DefaultOperationCosts,
 	}
 	sched.InitializeAccount("acc_1", policy)
-	storage := storage.NewAttachmentStorage("")
+	storage := storage.NewFileAttachmentStorage("")
 
 	service, _ := NewSendService(nil, sched, storage, accountStore, "12345678901234567890123456789012", SendServiceConfig{})
 
@@ -216,7 +244,7 @@ func TestSendService_SendEmail_Template(t *testing.T) {
 	scheduler := scheduler.NewFairUseScheduler()
 	defer scheduler.Shutdown()
 	scheduler.InitializeAccount("acc_1", nil)
-	storage := storage.NewAttachmentStorage("")
+	storage := storage.NewFileAttachmentStorage("")
 
 	service, _ := NewSendService(nil, scheduler, storage, accountStore, "12345678901234567890123456789012", SendServiceConfig{})
 
@@ -258,7 +286,7 @@ func TestSendService_ScheduleEmail(t *testing.T) {
 	scheduler := scheduler.NewFairUseScheduler()
 	defer scheduler.Shutdown()
 	scheduler.InitializeAccount("acc_1", nil)
-	storage := storage.NewAttachmentStorage("")
+	storage := storage.NewFileAttachmentStorage("")
 
 	service, _ := NewSendService(nil, scheduler, storage, accountStore, "12345678901234567890123456789012", SendServiceConfig{})
 
@@ -291,7 +319,7 @@ func TestSendService_ScheduleEmail_PastTime(t *testing.T) {
 	scheduler := scheduler.NewFairUseScheduler()
 	defer scheduler.Shutdown()
 	scheduler.InitializeAccount("acc_1", nil)
-	storage := storage.NewAttachmentStorage("")
+	storage := storage.NewFileAttachmentStorage("")
 
 	service, _ := NewSendService(nil, scheduler, storage, accountStore, "12345678901234567890123456789012", SendServiceConfig{})
 
@@ -321,7 +349,7 @@ func TestSendService_QueueEmail(t *testing.T) {
 	scheduler := scheduler.NewFairUseScheduler()
 	defer scheduler.Shutdown()
 	scheduler.InitializeAccount("acc_1", nil)
-	storage := storage.NewAttachmentStorage("")
+	storage := storage.NewFileAttachmentStorage("")
 
 	service, _ := NewSendService(nil, scheduler, storage, accountStore, "12345678901234567890123456789012", SendServiceConfig{})
 
@@ -356,7 +384,7 @@ func TestSendService_GetSendStatus(t *testing.T) {
 	scheduler := scheduler.NewFairUseScheduler()
 	defer scheduler.Shutdown()
 	scheduler.InitializeAccount("acc_1", nil)
-	storage := storage.NewAttachmentStorage("")
+	storage := storage.NewFileAttachmentStorage("")
 
 	service, _ := NewSendService(nil, scheduler, storage, accountStore, "12345678901234567890123456789012", SendServiceConfig{})
 
@@ -397,7 +425,7 @@ func TestSendService_CancelEmail(t *testing.T) {
 	scheduler := scheduler.NewFairUseScheduler()
 	defer scheduler.Shutdown()
 	scheduler.InitializeAccount("acc_1", nil)
-	storage := storage.NewAttachmentStorage("")
+	storage := storage.NewFileAttachmentStorage("")
 
 	service, _ := NewSendService(nil, scheduler, storage, accountStore, "12345678901234567890123456789012", SendServiceConfig{})
 
@@ -441,7 +469,7 @@ func TestSendService_CancelScheduledEmail(t *testing.T) {
 	scheduler := scheduler.NewFairUseScheduler()
 	defer scheduler.Shutdown()
 	scheduler.InitializeAccount("acc_1", nil)
-	storage := storage.NewAttachmentStorage("")
+	storage := storage.NewFileAttachmentStorage("")
 
 	service, _ := NewSendService(nil, scheduler, storage, accountStore, "12345678901234567890123456789012", SendServiceConfig{})
 
@@ -478,7 +506,7 @@ func TestSendService_GetQueueStats(t *testing.T) {
 	scheduler := scheduler.NewFairUseScheduler()
 	defer scheduler.Shutdown()
 	scheduler.InitializeAccount("acc_1", nil)
-	storage := storage.NewAttachmentStorage("")
+	storage := storage.NewFileAttachmentStorage("")
 
 	service, _ := NewSendService(nil, scheduler, storage, accountStore, "12345678901234567890123456789012", SendServiceConfig{})
 
@@ -526,7 +554,7 @@ func TestSendService_BuildEmailMessage(t *testing.T) {
 	scheduler := scheduler.NewFairUseScheduler()
 	defer scheduler.Shutdown()
 	scheduler.InitializeAccount("acc_1", nil)
-	storage := storage.NewAttachmentStorage("")
+	storage := storage.NewFileAttachmentStorage("")
 
 	service, _ := NewSendService(nil, scheduler, storage, accountStore, "12345678901234567890123456789012", SendServiceConfig{})
 
@@ -582,11 +610,11 @@ func TestSendService_LoadAttachments(t *testing.T) {
 	scheduler := scheduler.NewFairUseScheduler()
 	defer scheduler.Shutdown()
 	scheduler.InitializeAccount("acc_1", nil)
-	storage := storage.NewAttachmentStorage("")
+	storage := storage.NewFileAttachmentStorage("")
 
 	// Store test attachment
 	attachmentData := []byte("test attachment content")
-	attachmentPath, _ := storage.Store(attachmentData, "checksum123")
+	attachmentPath, _ := storage.Store("acc_1", "test_folder", "1", "test.txt", attachmentData)
 	// Extract ID from path for test
 	attachmentID := "test_attachment_id"
 

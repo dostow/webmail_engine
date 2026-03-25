@@ -10,10 +10,9 @@ import (
 )
 
 // MachineryEnvelopeQueue implements EnvelopeQueue using Machinery library
-// Suitable for production deployments with Redis/Broker backend
 // Note: This is a stub implementation. For full machinery support,
-// you need to initialize broker, backend, and lock instances explicitly.
-// See: https://github.com/RichardKnop/machinery/tree/v2
+// use the taskmaster package for task distribution instead.
+// The envelope queue should remain simple (memory or basic Redis).
 type MachineryEnvelopeQueue struct {
 	config   *MachineryQueueConfig
 	taskName string
@@ -21,8 +20,8 @@ type MachineryEnvelopeQueue struct {
 
 // MachineryQueueConfig holds configuration for machinery-based queue
 type MachineryQueueConfig struct {
-	BrokerURL           string        `json:"broker_url"`            // e.g., redis://localhost:6379
-	ResultBackend       string        `json:"result_backend"`        // e.g., redis://localhost:6379
+	BrokerURL           string        `json:"broker_url"`     // e.g., redis://localhost:6379
+	ResultBackend       string        `json:"result_backend"` // e.g., redis://localhost:6379
 	DefaultQueue        string        `json:"default_queue"`
 	EnqueueTimeout      time.Duration `json:"enqueue_timeout"`
 	CleanupInterval     time.Duration `json:"cleanup_interval"`
@@ -46,13 +45,7 @@ func DefaultMachineryConfig() *MachineryQueueConfig {
 }
 
 // NewMachineryEnvelopeQueue creates a new machinery-based envelope queue
-// Note: This is a stub. For production use, implement full machinery integration:
-//
-//	cnf := &config.Config{Broker: cfg.BrokerURL, DefaultQueue: cfg.DefaultQueue, ResultBackend: cfg.ResultBackend}
-//	broker := redis.New(cnf)  // or your preferred broker
-//	backend := redis.New(cnf)
-//	lock := redis.New(cnf)
-//	server := machinery.NewServer(cnf, broker, backend, lock)
+// Note: For production use, use memory queue and let taskmaster handle task distribution.
 func NewMachineryEnvelopeQueue(cfg *MachineryQueueConfig) (*MachineryEnvelopeQueue, error) {
 	if cfg == nil {
 		cfg = DefaultMachineryConfig()
@@ -67,25 +60,20 @@ func NewMachineryEnvelopeQueue(cfg *MachineryQueueConfig) (*MachineryEnvelopeQue
 }
 
 // Enqueue serializes the envelope for machinery processing
-// Note: This is a stub implementation
+// Note: This is a stub - use taskmaster for task distribution instead
 func (q *MachineryEnvelopeQueue) Enqueue(ctx context.Context, envelope *models.EnvelopeQueueItem, opts *EnqueueOptions) error {
 	if opts == nil {
 		opts = DefaultEnqueueOptions()
 	}
 
-	// Serialize envelope to JSON for logging/debugging
-	// In full implementation, this would send to machinery broker
+	// Serialize envelope to JSON for persistence
 	_, err := json.Marshal(envelope)
 	if err != nil {
 		return fmt.Errorf("failed to serialize envelope: %w", err)
 	}
 
-	// TODO: Implement full machinery integration
-	// signature := &tasks.Signature{Name: q.taskName, Args: []tasks.Arg{{Type: "[]byte", Value: payload}}}
-	// signature.RoutingKey = targetQueue
-	// _, err = q.server.SendTaskWithContext(ctx, signature)
-
-	return fmt.Errorf("machinery queue not fully implemented - use memory queue or implement full machinery integration")
+	// Stub - in production, use memory queue and taskmaster for distribution
+	return fmt.Errorf("machinery queue not implemented - use memory queue with taskmaster for task distribution")
 }
 
 // DequeuePending is not supported in machinery's push-based model

@@ -13,8 +13,9 @@ import (
 
 // WorkerConfig holds configuration for standalone workers (sync/processor)
 type WorkerConfig struct {
-	WorkerType      string                           `json:"worker_type"` // "sync", "processor", "memory-worker"
-	WorkerID        string                           `json:"worker_id"`   // Unique worker identifier
+	WorkerType      string                           `json:"worker_type"`                // "sync", "processor", "memory-worker"
+	WorkerID        string                           `json:"worker_id"`                  // Unique worker identifier
+	OperationalMode string                           `json:"operational_mode,omitempty"` // "scheduled_managed", "rest", "machinery"
 	Queue           QueueConfig                      `json:"queue"`
 	Store           config.StoreConfig               `json:"store"`
 	Logging         config.LoggingConfig             `json:"logging"`
@@ -39,6 +40,7 @@ func DefaultWorkerConfig(workerType string) *WorkerConfig {
 	return &WorkerConfig{
 		WorkerType:      workerType, // Can be empty for combined workers
 		WorkerID:        fmt.Sprintf("%s-%d", workerType, time.Now().UnixNano()),
+		OperationalMode: "scheduled_managed", // Default mode
 		ShutdownTimeout: 30 * time.Second,
 		Queue: QueueConfig{
 			Type:           "memory",

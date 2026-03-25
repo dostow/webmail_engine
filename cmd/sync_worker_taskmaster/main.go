@@ -22,7 +22,10 @@ import (
 )
 
 // SyncWorkerWithTaskmaster is a sync worker that uses taskmaster for task scheduling.
-// It loads accounts and creates scheduled sync tasks for each account.
+// It supports three operational modes:
+// - scheduled_managed: Schedules sync tasks for all accounts (default)
+// - rest: Exposes HTTP endpoints for task submission (no account fetching)
+// - machinery: Listens to message queue for tasks (no account fetching)
 type SyncWorkerWithTaskmaster struct {
 	Config         *workerconfig.WorkerConfig
 	Store          store.AccountStore
@@ -31,17 +34,18 @@ type SyncWorkerWithTaskmaster struct {
 	SessionPool    *pool.IMAPSessionPool
 	Queue          envelopequeue.EnvelopeQueue
 	AccountService *service.AccountService
+	Mode           string // scheduled_managed, rest, or machinery
 }
 
 // NewSyncWorkerWithTaskmaster creates a new sync worker using taskmaster.
-func NewSyncWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig) (*SyncWorkerWithTaskmaster, error) {
+func NewSyncWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig, mode string) (*SyncWorkerWithTaskmaster, error) {
 	// Initialize store
 	accountStore, err := createStore(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	// Initialize envelope queue
+	// Initialize envelope queue (simple memory queue for envelope storage)
 	queue, err := createQueue(cfg)
 	if err != nil {
 		accountStore.Close()
@@ -74,13 +78,11 @@ func NewSyncWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig) (*SyncWorkerWit
 	// Create sync service
 	syncService := service.NewSyncService(accountService, sessionPool, queue)
 
-	// Create dispatcher in managed mode (for local task execution)
-	dispatcher := taskmaster.NewDispatcher(
-		taskmaster.WithMode(taskmaster.ManagedMode),
-		taskmaster.WithWorkerCount(2),             // Sync tasks are I/O bound, few workers needed
-		taskmaster.WithTaskTimeout(5*time.Minute), // Sync can take time
-		taskmaster.WithQueueSize(100),
-	)
+	// Create dispatcher with mode
+	execMode := toTaskmasterMode(mode)
+	log.Printf("Initializing taskmaster dispatcher (mode=%s)...", execMode.String())
+
+	dispatcher := createDispatcher(execMode, cfg, mode)
 
 	// Register the sync task with the sync service
 	syncTask := &workers.SyncTask{
@@ -100,12 +102,60 @@ func NewSyncWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig) (*SyncWorkerWit
 		SessionPool:    sessionPool,
 		Queue:          queue,
 		AccountService: accountService,
+		Mode:           mode,
 	}, nil
 }
 
-// Start loads accounts and schedules sync tasks.
+// createDispatcher creates a taskmaster dispatcher with mode-specific configuration
+func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerConfig, modeStr string) taskmaster.FullDispatcher {
+	switch mode {
+	case taskmaster.RESTMode:
+		return taskmaster.NewDispatcher(
+			taskmaster.WithMode(mode),
+			taskmaster.WithRESTConfig(&taskmaster.RESTConfig{
+				Addr:                ":8080",
+				BasePath:            "/api/v1/tasks",
+				EnableSyncExecution: true,
+			}),
+			taskmaster.WithLogger(&standardLogger{}),
+		)
+	case taskmaster.MachineryMode:
+		return taskmaster.NewDispatcher(
+			taskmaster.WithMode(mode),
+			taskmaster.WithMachineryConfig(&taskmaster.MachineryConfig{
+				BrokerURL:         cfg.Queue.RedisURL,
+				ResultBackend:     cfg.Queue.RedisURL,
+				DefaultQueue:      "webmail_sync_tasks",
+				DefaultRetryCount: 3,
+			}),
+			taskmaster.WithLogger(&standardLogger{}),
+		)
+	default: // ManagedMode (scheduled_managed)
+		return taskmaster.NewDispatcher(
+			taskmaster.WithMode(mode),
+			taskmaster.WithWorkerCount(2),
+			taskmaster.WithTaskTimeout(5*time.Minute),
+			taskmaster.WithQueueSize(100),
+			taskmaster.WithLogger(&standardLogger{}),
+		)
+	}
+}
+
+// toTaskmasterMode converts string mode to taskmaster.ExecutionMode
+func toTaskmasterMode(mode string) taskmaster.ExecutionMode {
+	switch mode {
+	case "rest":
+		return taskmaster.RESTMode
+	case "machinery":
+		return taskmaster.MachineryMode
+	default:
+		return taskmaster.ManagedMode // scheduled_managed
+	}
+}
+
+// Start initializes the worker based on the operational mode.
 func (w *SyncWorkerWithTaskmaster) Start() error {
-	log.Printf("Starting sync worker with taskmaster (ID: %s)", w.Config.WorkerID)
+	log.Printf("Starting sync worker with taskmaster (ID: %s, Mode: %s)", w.Config.WorkerID, w.Mode)
 
 	ctx := context.Background()
 
@@ -114,6 +164,21 @@ func (w *SyncWorkerWithTaskmaster) Start() error {
 		return err
 	}
 
+	// Mode-specific initialization
+	switch w.Mode {
+	case "scheduled_managed":
+		return w.startScheduledMode(ctx)
+	case "rest":
+		return w.startRESTMode(ctx)
+	case "machinery":
+		return w.startMachineryMode(ctx)
+	default:
+		return w.startScheduledMode(ctx)
+	}
+}
+
+// startScheduledMode loads accounts and creates scheduled sync tasks.
+func (w *SyncWorkerWithTaskmaster) startScheduledMode(ctx context.Context) error {
 	// Load all active accounts
 	accounts, _, err := w.Store.List(ctx, 0, 0)
 	if err != nil {
@@ -154,7 +219,7 @@ func (w *SyncWorkerWithTaskmaster) Start() error {
 			continue
 		}
 
-		// Schedule recurring sync task
+		// Schedule recurring sync task via taskmaster
 		scheduleName := "sync_" + acc.ID
 		scheduleID, err := w.Dispatcher.ScheduleTask(ctx, "sync", payloadBytes, interval, &taskmaster.ScheduleTaskOptions{
 			Name: scheduleName,
@@ -169,6 +234,24 @@ func (w *SyncWorkerWithTaskmaster) Start() error {
 	}
 
 	log.Printf("Sync worker started with %d scheduled accounts", scheduledCount)
+	return nil
+}
+
+// startRESTMode initializes REST-specific components (no account fetching).
+func (w *SyncWorkerWithTaskmaster) startRESTMode(ctx context.Context) error {
+	log.Println("REST mode: Account fetching disabled. Waiting for HTTP requests...")
+	log.Println("Endpoints:")
+	log.Println("  POST /api/v1/tasks/sync - Submit sync task")
+	log.Println("  GET  /api/v1/tasks/health - Health check")
+	// No account loading - tasks come via HTTP
+	return nil
+}
+
+// startMachineryMode initializes Machinery-specific components.
+func (w *SyncWorkerWithTaskmaster) startMachineryMode(ctx context.Context) error {
+	log.Println("Machinery mode: Listening for incoming sync tasks from message queue...")
+	log.Printf("Broker: %s", w.Config.Queue.RedisURL)
+	// No account loading - tasks come from queue
 	return nil
 }
 
@@ -211,8 +294,9 @@ func createQueue(cfg *workerconfig.WorkerConfig) (envelopequeue.EnvelopeQueue, e
 	case "memory":
 		return envelopequeue.NewMemoryEnvelopeQueue(envelopequeue.DefaultMemoryEnvelopeQueueConfig()), nil
 	case "redis":
-		config := cfg.ToEnvelopeQueueConfig()
-		return envelopequeue.NewMachineryEnvelopeQueue(config)
+		// Use memory queue - taskmaster handles task distribution
+		log.Println("Note: Using memory queue. Taskmaster handles task distribution.")
+		return envelopequeue.NewMemoryEnvelopeQueue(envelopequeue.DefaultMemoryEnvelopeQueueConfig()), nil
 	default:
 		return envelopequeue.NewMemoryEnvelopeQueue(envelopequeue.DefaultMemoryEnvelopeQueueConfig()), nil
 	}
@@ -237,9 +321,29 @@ func createStore(cfg *workerconfig.WorkerConfig) (store.AccountStore, error) {
 	return accountStore, err
 }
 
+// standardLogger adapts the standard log package to the taskmaster.Logger interface.
+type standardLogger struct{}
+
+func (l *standardLogger) Info(msg string, keysAndValues ...interface{}) {
+	log.Printf("[INFO] %s %v", msg, keysAndValues)
+}
+
+func (l *standardLogger) Error(msg string, keysAndValues ...interface{}) {
+	log.Printf("[ERROR] %s %v", msg, keysAndValues)
+}
+
+func (l *standardLogger) Debug(msg string, keysAndValues ...interface{}) {
+	log.Printf("[DEBUG] %s %v", msg, keysAndValues)
+}
+
+func (l *standardLogger) Warn(msg string, keysAndValues ...interface{}) {
+	log.Printf("[WARN] %s %v", msg, keysAndValues)
+}
+
 func main() {
 	// Parse command line flags
 	configPath := flag.String("config", "", "Path to configuration file")
+	mode := flag.String("mode", "scheduled_managed", "Operational mode: scheduled_managed, rest, machinery")
 	storeType := flag.String("store", "sql", "Store type: sql, memory")
 	storeDriver := flag.String("store-driver", "sqlite", "SQL driver: sqlite, postgres")
 	storeDSN := flag.String("store-dsn", "./data/webmail.db", "SQL DSN")
@@ -264,8 +368,19 @@ func main() {
 		config.ExpandEnvVars(cfg)
 	}
 
+	// Resolve mode: CLI > Config > Default
+	operationalMode := resolveOperationalMode(*mode, cfg.OperationalMode)
+	cfg.OperationalMode = operationalMode
+
+	// Log startup info
+	log.Printf("=== Sync Worker Taskmaster ===")
+	log.Printf("Worker ID:       %s", cfg.WorkerID)
+	log.Printf("Operational Mode: %s", operationalMode)
+	log.Printf("Mode Source:     %s", getModeSource(*mode, cfg.OperationalMode))
+	log.Printf("================================")
+
 	// Create and run sync worker with taskmaster
-	syncWorker, err := NewSyncWorkerWithTaskmaster(cfg)
+	syncWorker, err := NewSyncWorkerWithTaskmaster(cfg, operationalMode)
 	if err != nil {
 		log.Fatalf("Failed to create sync worker: %v", err)
 	}
@@ -277,4 +392,44 @@ func main() {
 	if err := syncWorker.Run(); err != nil {
 		log.Fatalf("Sync worker error: %v", err)
 	}
+}
+
+// resolveOperationalMode implements precedence rules: CLI > Config > Default
+func resolveOperationalMode(cliMode, configMode string) string {
+	validModes := map[string]bool{
+		"scheduled_managed": true,
+		"rest":              true,
+		"machinery":         true,
+	}
+
+	// CLI argument takes precedence
+	if cliMode != "" && cliMode != "scheduled_managed" {
+		if !validModes[cliMode] {
+			log.Fatalf("Invalid mode '%s'. Valid modes: scheduled_managed, rest, machinery", cliMode)
+		}
+		return cliMode
+	}
+
+	// Config file value
+	if configMode != "" {
+		if !validModes[configMode] {
+			log.Fatalf("Invalid config mode '%s'. Valid modes: scheduled_managed, rest, machinery", configMode)
+		}
+		return configMode
+	}
+
+	// Default
+	log.Println("No mode specified, defaulting to 'scheduled_managed'")
+	return "scheduled_managed"
+}
+
+// getModeSource returns where the mode came from
+func getModeSource(cliMode, configMode string) string {
+	if cliMode != "" && cliMode != "scheduled_managed" {
+		return "CLI"
+	}
+	if configMode != "" {
+		return "Config"
+	}
+	return "Default"
 }

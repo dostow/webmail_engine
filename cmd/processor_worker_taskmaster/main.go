@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"log"
 	"os"
@@ -11,8 +10,7 @@ import (
 	"time"
 
 	"webmail_engine/internal/config"
-	"webmail_engine/internal/envelopequeue"
-	"webmail_engine/internal/models"
+	"webmail_engine/internal/pool"
 	"webmail_engine/internal/service"
 	"webmail_engine/internal/store"
 	"webmail_engine/internal/taskmaster"
@@ -22,163 +20,152 @@ import (
 )
 
 // ProcessorWorkerWithTaskmaster is a processor worker that uses taskmaster for task execution.
-// It reads envelopes from the queue and dispatches envelope processor tasks.
 type ProcessorWorkerWithTaskmaster struct {
-	Config     *workerconfig.WorkerConfig
-	Queue      envelopequeue.EnvelopeQueue
-	Store      store.AccountStore
-	Dispatcher taskmaster.FullDispatcher
+	Config           *workerconfig.WorkerConfig
+	Store            store.AccountStore
+	Dispatcher       taskmaster.FullDispatcher
+	ProcessorService *service.EnvelopeProcessorService
+	AccountService   *service.AccountService
+	SessionPool      *pool.IMAPSessionPool
+	Mode             string
 }
 
 // NewProcessorWorkerWithTaskmaster creates a new processor worker using taskmaster.
-func NewProcessorWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig) (*ProcessorWorkerWithTaskmaster, error) {
-	// Initialize queue
-	queue, err := createQueue(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	// Initialize store
+func NewProcessorWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig, mode string) (*ProcessorWorkerWithTaskmaster, error) {
 	accountStore, err := createStore(cfg)
 	if err != nil {
-		queue.Close()
 		return nil, err
 	}
 
-	// Create dispatcher in managed mode with configurable worker count
-	dispatcher := taskmaster.NewDispatcher(
-		taskmaster.WithMode(taskmaster.ManagedMode),
-		taskmaster.WithWorkerCount(cfg.ProcessorConfig.Concurrency),
-		taskmaster.WithTaskTimeout(2*time.Minute), // Envelope processing timeout
-		taskmaster.WithQueueSize(cfg.ProcessorConfig.BatchSize*2),
-	)
+	sessionPool := pool.NewIMAPSessionPool(pool.DefaultSessionPoolConfig(), nil)
 
-	// Register the envelope processor task
+	accountService, err := service.NewAccountService(
+		accountStore,
+		nil,
+		sessionPool,
+		nil,
+		nil,
+		service.AccountServiceConfig{
+			EncryptionKey: cfg.Security.EncryptionKey,
+		},
+	)
+	if err != nil {
+		accountStore.Close()
+		return nil, err
+	}
+
+	sessionPool.SetAccountService(accountService)
+	processorService := service.NewEnvelopeProcessorService(accountService, sessionPool)
+
+	execMode := toTaskmasterMode(mode)
+	log.Printf("Initializing taskmaster dispatcher (mode=%s)...", execMode.String())
+
+	dispatcher := createDispatcher(execMode, cfg, mode)
+
 	processorTask := &workers.EnvelopeProcessorTask{
-		// ProcessorService would be injected here in a real implementation
+		ProcessorService: processorService,
 	}
 	if err := dispatcher.Register(processorTask); err != nil {
-		queue.Close()
 		accountStore.Close()
 		return nil, err
 	}
 
 	return &ProcessorWorkerWithTaskmaster{
-		Config:     cfg,
-		Queue:      queue,
-		Store:      accountStore,
-		Dispatcher: dispatcher,
+		Config:           cfg,
+		Store:            accountStore,
+		Dispatcher:       dispatcher,
+		ProcessorService: processorService,
+		AccountService:   accountService,
+		SessionPool:      sessionPool,
+		Mode:             mode,
 	}, nil
 }
 
-// Start begins the dispatcher and starts processing envelopes from the queue.
+func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerConfig, modeStr string) taskmaster.FullDispatcher {
+	switch mode {
+	case taskmaster.RESTMode:
+		return taskmaster.NewDispatcher(
+			taskmaster.WithMode(mode),
+			taskmaster.WithRESTConfig(&taskmaster.RESTConfig{
+				Addr:                ":8081",
+				BasePath:            "/api/v1/tasks",
+				EnableSyncExecution: true,
+			}),
+			taskmaster.WithLogger(&standardLogger{}),
+		)
+	case taskmaster.MachineryMode:
+		return taskmaster.NewDispatcher(
+			taskmaster.WithMode(mode),
+			taskmaster.WithMachineryConfig(&taskmaster.MachineryConfig{
+				BrokerURL:         cfg.Queue.RedisURL,
+				ResultBackend:     cfg.Queue.RedisURL,
+				DefaultQueue:      "webmail_processor_tasks",
+				DefaultRetryCount: 3,
+			}),
+			taskmaster.WithLogger(&standardLogger{}),
+		)
+	default:
+		return taskmaster.NewDispatcher(
+			taskmaster.WithMode(mode),
+			taskmaster.WithWorkerCount(cfg.ProcessorConfig.Concurrency),
+			taskmaster.WithTaskTimeout(2*time.Minute),
+			taskmaster.WithQueueSize(cfg.ProcessorConfig.BatchSize*2),
+			taskmaster.WithLogger(&standardLogger{}),
+		)
+	}
+}
+
+func toTaskmasterMode(mode string) taskmaster.ExecutionMode {
+	switch mode {
+	case "rest":
+		return taskmaster.RESTMode
+	case "machinery":
+		return taskmaster.MachineryMode
+	default:
+		return taskmaster.ManagedMode
+	}
+}
+
 func (w *ProcessorWorkerWithTaskmaster) Start() error {
-	log.Printf("Starting processor worker with taskmaster (ID: %s, Concurrency: %d)",
-		w.Config.WorkerID, w.Config.ProcessorConfig.Concurrency)
+	log.Printf("Starting processor worker (ID: %s, Mode: %s, Concurrency: %d)",
+		w.Config.WorkerID, w.Mode, w.Config.ProcessorConfig.Concurrency)
 
 	ctx := context.Background()
-
-	// Start the dispatcher
 	if err := w.Dispatcher.Start(ctx); err != nil {
 		return err
 	}
 
-	// Start envelope processing loop
-	go w.processEnvelopes(ctx)
+	switch w.Mode {
+	case "managed":
+		return w.startManagedMode(ctx)
+	case "rest":
+		return w.startRESTMode(ctx)
+	case "machinery":
+		return w.startMachineryMode(ctx)
+	default:
+		return w.startManagedMode(ctx)
+	}
+}
 
-	log.Println("Processor worker with taskmaster is running")
+func (w *ProcessorWorkerWithTaskmaster) startManagedMode(ctx context.Context) error {
+	log.Println("Processor worker running - waiting for envelope_processor tasks...")
 	return nil
 }
 
-// processEnvelopes reads envelopes from the queue and dispatches them as tasks.
-func (w *ProcessorWorkerWithTaskmaster) processEnvelopes(ctx context.Context) {
-	ticker := time.NewTicker(w.Config.ProcessorConfig.PollInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			log.Println("Envelope processing loop stopped")
-			return
-		case <-ticker.C:
-			w.processBatch(ctx)
-		}
-	}
+func (w *ProcessorWorkerWithTaskmaster) startRESTMode(ctx context.Context) error {
+	log.Println("REST mode: Waiting for HTTP task submissions...")
+	log.Println("Endpoints:")
+	log.Println("  POST /api/v1/tasks/envelope_processor - Submit task")
+	log.Println("  GET  /api/v1/tasks/health - Health check")
+	return nil
 }
 
-// processBatch fetches a batch of envelopes and dispatches them as tasks.
-func (w *ProcessorWorkerWithTaskmaster) processBatch(ctx context.Context) {
-	// Get pending envelopes by priority
-	priorityQueues, err := w.Queue.GetPendingByPriority(ctx, "")
-	if err != nil {
-		log.Printf("Failed to get pending envelopes: %v", err)
-		return
-	}
-
-	// Process by priority order
-	priorities := []models.EnvelopeProcessingPriority{
-		models.PriorityHigh,
-		models.PriorityNormal,
-		models.PriorityLow,
-	}
-	totalDispatched := 0
-
-	for _, priority := range priorities {
-		envelopes := priorityQueues[priority]
-		if len(envelopes) == 0 {
-			continue
-		}
-
-		// Process up to BatchSize envelopes
-		batchSize := w.Config.ProcessorConfig.BatchSize
-		if len(envelopes) < batchSize {
-			batchSize = len(envelopes)
-		}
-
-		for i := 0; i < batchSize; i++ {
-			envelope := envelopes[i]
-
-			// Create envelope processor payload
-			payload := workers.EnvelopeProcessorPayload{
-				EnvelopeID: envelope.ID,
-				AccountID:  envelope.AccountID,
-				FolderName: envelope.FolderName,
-				UID:        envelope.UID,
-				Options: workers.ProcessOptions{
-					FetchBody:          true,
-					ExtractLinks:       true,
-					ProcessAttachments: true,
-					TriggerWebhooks:    true,
-				},
-			}
-
-			payloadBytes, err := json.Marshal(payload)
-			if err != nil {
-				log.Printf("Failed to marshal payload for envelope %s: %v", envelope.ID, err)
-				continue
-			}
-
-			// Dispatch task
-			if err := w.Dispatcher.Dispatch(ctx, "envelope_processor", payloadBytes); err != nil {
-				log.Printf("Failed to dispatch envelope %s: %v", envelope.ID, err)
-				continue
-			}
-
-			totalDispatched++
-
-			// Update envelope status to processing
-			if err := w.Queue.UpdateStatus(ctx, envelope.ID, "processing", ""); err != nil {
-				log.Printf("Failed to update envelope status: %v", err)
-			}
-		}
-	}
-
-	if totalDispatched > 0 {
-		log.Printf("Dispatched %d envelope processor tasks", totalDispatched)
-	}
+func (w *ProcessorWorkerWithTaskmaster) startMachineryMode(ctx context.Context) error {
+	log.Println("Machinery mode: Listening for tasks from queue...")
+	log.Printf("Broker: %s", w.Config.Queue.RedisURL)
+	return nil
 }
 
-// Run blocks until shutdown signal.
 func (w *ProcessorWorkerWithTaskmaster) Run() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -186,43 +173,22 @@ func (w *ProcessorWorkerWithTaskmaster) Run() error {
 	return w.Stop()
 }
 
-// Stop gracefully shuts down the worker.
 func (w *ProcessorWorkerWithTaskmaster) Stop() error {
-	log.Println("Shutting down processor worker with taskmaster...")
+	log.Println("Shutting down processor worker...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), w.Config.ShutdownTimeout)
 	defer cancel()
 
-	// Stop dispatcher
 	if err := w.Dispatcher.Stop(ctx); err != nil {
 		log.Printf("Error stopping dispatcher: %v", err)
 	}
 
-	// Close queue and store
-	if w.Queue != nil {
-		w.Queue.Close()
-	}
 	if w.Store != nil {
 		w.Store.Close()
 	}
 
-	log.Println("Processor worker with taskmaster stopped")
+	log.Println("Processor worker stopped")
 	return nil
-}
-
-// Helper functions
-
-func createQueue(cfg *workerconfig.WorkerConfig) (envelopequeue.EnvelopeQueue, error) {
-	switch cfg.Queue.Type {
-	case "memory":
-		return envelopequeue.NewMemoryEnvelopeQueue(envelopequeue.DefaultMemoryEnvelopeQueueConfig()), nil
-	case "redis":
-		// Would use Machinery queue for Redis
-		config := cfg.ToEnvelopeQueueConfig()
-		return envelopequeue.NewMachineryEnvelopeQueue(config)
-	default:
-		return envelopequeue.NewMemoryEnvelopeQueue(envelopequeue.DefaultMemoryEnvelopeQueueConfig()), nil
-	}
 }
 
 func createStore(cfg *workerconfig.WorkerConfig) (store.AccountStore, error) {
@@ -244,9 +210,27 @@ func createStore(cfg *workerconfig.WorkerConfig) (store.AccountStore, error) {
 	return accountStore, err
 }
 
+type standardLogger struct{}
+
+func (l *standardLogger) Info(msg string, keysAndValues ...interface{}) {
+	log.Printf("[INFO] %s %v", msg, keysAndValues)
+}
+
+func (l *standardLogger) Error(msg string, keysAndValues ...interface{}) {
+	log.Printf("[ERROR] %s %v", msg, keysAndValues)
+}
+
+func (l *standardLogger) Debug(msg string, keysAndValues ...interface{}) {
+	log.Printf("[DEBUG] %s %v", msg, keysAndValues)
+}
+
+func (l *standardLogger) Warn(msg string, keysAndValues ...interface{}) {
+	log.Printf("[WARN] %s %v", msg, keysAndValues)
+}
+
 func main() {
-	// Parse command line flags
 	configPath := flag.String("config", "", "Path to configuration file")
+	mode := flag.String("mode", "managed", "Operational mode: managed, rest, machinery")
 	queueType := flag.String("queue", "memory", "Queue type: memory, redis")
 	redisURL := flag.String("redis", "redis://localhost:6379", "Redis URL")
 	storeType := flag.String("store", "sql", "Store type: sql, memory")
@@ -255,7 +239,6 @@ func main() {
 	concurrency := flag.Int("concurrency", 4, "Number of processor workers")
 	flag.Parse()
 
-	// Load or create configuration
 	var cfg *workerconfig.WorkerConfig
 	var err error
 
@@ -284,8 +267,15 @@ func main() {
 		config.ExpandEnvVars(cfg)
 	}
 
-	// Create and run processor worker with taskmaster
-	processorWorker, err := NewProcessorWorkerWithTaskmaster(cfg)
+	operationalMode := resolveOperationalMode(*mode, cfg.OperationalMode)
+
+	log.Printf("=== Processor Worker Taskmaster ===")
+	log.Printf("Worker ID:        %s", cfg.WorkerID)
+	log.Printf("Operational Mode: %s", operationalMode)
+	log.Printf("Concurrency:      %d", cfg.ProcessorConfig.Concurrency)
+	log.Printf("====================================")
+
+	processorWorker, err := NewProcessorWorkerWithTaskmaster(cfg, operationalMode)
 	if err != nil {
 		log.Fatalf("Failed to create processor worker: %v", err)
 	}
@@ -297,4 +287,28 @@ func main() {
 	if err := processorWorker.Run(); err != nil {
 		log.Fatalf("Processor worker error: %v", err)
 	}
+}
+
+func resolveOperationalMode(cliMode, configMode string) string {
+	validModes := map[string]bool{
+		"managed":   true,
+		"rest":      true,
+		"machinery": true,
+	}
+
+	if cliMode != "" && cliMode != "managed" {
+		if !validModes[cliMode] {
+			log.Fatalf("Invalid mode '%s'. Valid modes: managed, rest, machinery", cliMode)
+		}
+		return cliMode
+	}
+
+	if configMode != "" {
+		if !validModes[configMode] {
+			log.Fatalf("Invalid config mode '%s'. Valid modes: managed, rest, machinery", configMode)
+		}
+		return configMode
+	}
+
+	return "managed"
 }

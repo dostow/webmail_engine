@@ -59,7 +59,8 @@ func main() {
 	)
 
 	// Configure mode-specific options
-	if execMode == taskmaster.RESTMode {
+	switch execMode {
+	case taskmaster.RESTMode:
 		dispatcher = taskmaster.NewDispatcher(
 			taskmaster.WithMode(execMode),
 			taskmaster.WithRESTConfig(&taskmaster.RESTConfig{
@@ -69,7 +70,7 @@ func main() {
 			}),
 			taskmaster.WithLogger(logger),
 		)
-	} else if execMode == taskmaster.MachineryMode {
+	case taskmaster.MachineryMode:
 		dispatcher = taskmaster.NewDispatcher(
 			taskmaster.WithMode(execMode),
 			taskmaster.WithMachineryConfig(&taskmaster.MachineryConfig{

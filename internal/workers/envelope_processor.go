@@ -6,105 +6,37 @@ import (
 	"fmt"
 	"time"
 
+	"webmail_engine/internal/service"
 	"webmail_engine/internal/taskmaster"
 )
 
-// EnvelopeProcessorTask processes email envelopes from the queue.
-// This migrates the existing processor_worker logic to the taskmaster pattern.
+// EnvelopeProcessorTask processes email envelopes.
 type EnvelopeProcessorTask struct {
-	// ProcessorService handles the actual envelope processing
-	ProcessorService EnvelopeProcessorService
+	ProcessorService ProcessorService
 }
 
-// EnvelopeProcessorService defines the interface for envelope processing operations.
-type EnvelopeProcessorService interface {
-	ProcessEnvelope(ctx context.Context, envelope *EnvelopeQueueItem) error
-	GetProcessorStats(ctx context.Context) (*ProcessorStats, error)
-}
-
-// EnvelopeQueueItem represents an envelope waiting to be processed.
-type EnvelopeQueueItem struct {
-	// ID is the unique envelope identifier
-	ID string `json:"id"`
-
-	// AccountID is the account this envelope belongs to
-	AccountID string `json:"account_id"`
-
-	// FolderName is the IMAP folder name
-	FolderName string `json:"folder_name"`
-
-	// UID is the IMAP UID
-	UID uint32 `json:"uid"`
-
-	// MessageID is the email Message-ID header
-	MessageID string `json:"message_id"`
-
-	// From is the sender address
-	From string `json:"from"`
-
-	// Subject is the email subject
-	Subject string `json:"subject"`
-
-	// Date is the email date
-	Date time.Time `json:"date"`
-
-	// Size is the message size in bytes
-	Size int64 `json:"size"`
-
-	// Priority is the processing priority
-	Priority string `json:"priority"`
-
-	// RetryCount is the number of processing attempts
-	RetryCount int `json:"retry_count"`
-
-	// MaxRetries is the maximum retry attempts
-	MaxRetries int `json:"max_retries"`
-}
-
-// ProcessorStats holds envelope processor statistics.
-type ProcessorStats struct {
-	ProcessedCount    int64         `json:"processed_count"`
-	FailedCount       int64         `json:"failed_count"`
-	SkippedCount      int64         `json:"skipped_count"`
-	LastProcessedAt   time.Time     `json:"last_processed_at"`
-	AvgProcessingTime time.Duration `json:"avg_processing_time"`
-	CurrentQueueSize  int64         `json:"current_queue_size"`
+// ProcessorService defines the interface for envelope processing.
+type ProcessorService interface {
+	ProcessEnvelope(ctx context.Context, envelope *service.EnvelopeQueueItem) error
+	GetProcessorStats(ctx context.Context) (*service.ProcessorStats, error)
 }
 
 // EnvelopeProcessorPayload is the payload for envelope processor tasks.
 type EnvelopeProcessorPayload struct {
-	// EnvelopeID identifies the envelope to process
-	EnvelopeID string `json:"envelope_id"`
-
-	// AccountID is the account this envelope belongs to
-	AccountID string `json:"account_id"`
-
-	// FolderName is the IMAP folder name
-	FolderName string `json:"folder_name"`
-
-	// UID is the IMAP UID
-	UID uint32 `json:"uid"`
-
-	// Options configures processing behavior
-	Options ProcessOptions `json:"options,omitempty"`
+	EnvelopeID string         `json:"envelope_id"`
+	AccountID  string         `json:"account_id"`
+	FolderName string         `json:"folder_name"`
+	UID        uint32         `json:"uid"`
+	Options    ProcessOptions `json:"options,omitempty"`
 }
 
 // ProcessOptions configures envelope processing behavior.
 type ProcessOptions struct {
-	// FetchBody determines whether to fetch the full message body
-	FetchBody bool `json:"fetch_body"`
-
-	// ExtractLinks enables link extraction from the body
-	ExtractLinks bool `json:"extract_links"`
-
-	// ProcessAttachments enables attachment processing
+	FetchBody          bool `json:"fetch_body"`
+	ExtractLinks       bool `json:"extract_links"`
 	ProcessAttachments bool `json:"process_attachments"`
-
-	// UpdateSearchIndex enables search index updates
-	UpdateSearchIndex bool `json:"update_search_index"`
-
-	// TriggerWebhooks enables webhook notifications
-	TriggerWebhooks bool `json:"trigger_webhooks"`
+	UpdateSearchIndex  bool `json:"update_search_index"`
+	TriggerWebhooks    bool `json:"trigger_webhooks"`
 }
 
 // ID returns the unique task identifier.
@@ -136,20 +68,11 @@ func (t *EnvelopeProcessorTask) Execute(ctx context.Context, payload []byte) err
 	}
 
 	// Build envelope item
-	envelope := &EnvelopeQueueItem{
+	envelope := &service.EnvelopeQueueItem{
 		ID:         req.EnvelopeID,
 		AccountID:  req.AccountID,
 		FolderName: req.FolderName,
 		UID:        req.UID,
-	}
-
-	// Apply default options
-	opts := req.Options
-	if opts.FetchBody = true; true { // Default to fetching body
-		opts.FetchBody = true
-	}
-	if opts.TriggerWebhooks = true; true { // Default to triggering webhooks
-		opts.TriggerWebhooks = true
 	}
 
 	// Log processing start

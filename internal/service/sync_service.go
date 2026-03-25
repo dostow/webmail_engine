@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"slices"
+	"sync"
 	"time"
 
 	"webmail_engine/internal/envelopequeue"
@@ -14,6 +15,9 @@ import (
 )
 
 // Constants for sync service configuration
+
+// foldersPerBatch is the number of folders to sync concurrently.
+const foldersPerBatch = 5
 
 // initialSyncBatchLimit is the maximum number of messages fetched during initial sync.
 const initialSyncBatchLimit = 500
@@ -85,25 +89,61 @@ func (s *SyncService) SyncAccount(ctx context.Context, accountID string, opts Sy
 	totalSynced := 0
 	envelopesEnqueued := 0
 	var errors []string
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 
-	// Sync each folder
-	for _, folder := range folders {
-		// Skip spam/trash if configured
-		if !opts.IncludeSpam && slices.Contains(folder.Attributes, "\\Junk") {
-			continue
-		}
-		if !opts.IncludeTrash && slices.Contains(folder.Attributes, "\\Trash") {
-			continue
+	// Process folders in batches
+	for i := 0; i < len(folders); i += foldersPerBatch {
+		// Check for cancellation before starting batch
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
 		}
 
-		// Sync folder
-		count, err := s.syncFolder(ctx, accountID, client, folder.Name, opts)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("folder %s: %v", folder.Name, err))
-			continue
+		end := i + foldersPerBatch
+		if end > len(folders) {
+			end = len(folders)
 		}
-		totalSynced += count
-		envelopesEnqueued += count
+		batch := folders[i:end]
+
+		// Launch goroutines for this batch
+		for _, folder := range batch {
+			wg.Add(1)
+			go func(folder pool.FolderInfo) {
+				defer wg.Done()
+
+				// Check for cancellation
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+
+				// Skip spam/trash if configured
+				if !opts.IncludeSpam && slices.Contains(folder.Attributes, "\\Junk") {
+					return
+				}
+				if !opts.IncludeTrash && slices.Contains(folder.Attributes, "\\Trash") {
+					return
+				}
+
+				// Sync folder
+				count, err := s.syncFolder(ctx, accountID, client, folder.Name, opts)
+
+				mu.Lock()
+				defer mu.Unlock()
+				if err != nil {
+					errors = append(errors, fmt.Sprintf("folder %s: %v", folder.Name, err))
+				} else {
+					totalSynced += count
+					envelopesEnqueued += count
+				}
+			}(folder)
+		}
+
+		// Wait for batch to complete
+		wg.Wait()
 	}
 
 	result.MessagesSynced = totalSynced

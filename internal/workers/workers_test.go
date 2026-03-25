@@ -336,13 +336,13 @@ func TestEnvelopeProcessorTaskID(t *testing.T) {
 
 // TestEnvelopeProcessorTaskExecute tests task execution.
 func TestEnvelopeProcessorTaskExecute(t *testing.T) {
-	service := &MockEnvelopeProcessorService{
-		processFunc: func(ctx context.Context, envelope *EnvelopeQueueItem) error {
+	processorService := &MockEnvelopeProcessorService{
+		processFunc: func(ctx context.Context, envelope *service.EnvelopeQueueItem) error {
 			return nil
 		},
 	}
 
-	task := &EnvelopeProcessorTask{ProcessorService: service}
+	task := &EnvelopeProcessorTask{ProcessorService: processorService}
 
 	payload := EnvelopeProcessorPayload{
 		EnvelopeID: "env_123",
@@ -361,18 +361,18 @@ func TestEnvelopeProcessorTaskExecute(t *testing.T) {
 
 // MockEnvelopeProcessorService is a test implementation.
 type MockEnvelopeProcessorService struct {
-	processFunc func(ctx context.Context, envelope *EnvelopeQueueItem) error
+	processFunc func(ctx context.Context, envelope *service.EnvelopeQueueItem) error
 }
 
-func (m *MockEnvelopeProcessorService) ProcessEnvelope(ctx context.Context, envelope *EnvelopeQueueItem) error {
+func (m *MockEnvelopeProcessorService) ProcessEnvelope(ctx context.Context, envelope *service.EnvelopeQueueItem) error {
 	if m.processFunc != nil {
 		return m.processFunc(ctx, envelope)
 	}
 	return nil
 }
 
-func (m *MockEnvelopeProcessorService) GetProcessorStats(ctx context.Context) (*ProcessorStats, error) {
-	return &ProcessorStats{}, nil
+func (m *MockEnvelopeProcessorService) GetProcessorStats(ctx context.Context) (*service.ProcessorStats, error) {
+	return &service.ProcessorStats{}, nil
 }
 
 // TestInterfaceCompliance tests that all task types implement taskmaster.Task.

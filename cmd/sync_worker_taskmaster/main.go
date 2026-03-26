@@ -183,8 +183,10 @@ func (w *SyncWorkerWithTaskmaster) startScheduledMode(ctx context.Context) error
 
 	log.Printf("Loaded %d accounts", len(accounts))
 
-	// Create scheduled sync tasks for each active account
-	scheduledCount := 0
+	// Build batch of scheduled tasks
+	var scheduledTasks []taskmaster.ScheduledTask
+	var accountNames []string
+
 	for _, acc := range accounts {
 		if acc.Status != "active" || !acc.SyncSettings.AutoSync {
 			continue
@@ -214,21 +216,34 @@ func (w *SyncWorkerWithTaskmaster) startScheduledMode(ctx context.Context) error
 			continue
 		}
 
-		// Schedule recurring sync task via taskmaster
-		scheduleName := "sync_" + acc.ID
-		scheduleID, err := w.Dispatcher.ScheduleTask(ctx, "sync", payloadBytes, interval, &taskmaster.ScheduleTaskOptions{
-			Name: scheduleName,
+		scheduledTasks = append(scheduledTasks, taskmaster.ScheduledTask{
+			TaskID:   "sync",
+			Payload:  payloadBytes,
+			Interval: interval,
+			Options: &taskmaster.ScheduleTaskOptions{
+				Name: "sync_" + acc.ID,
+			},
 		})
-		if err != nil {
-			log.Printf("Failed to schedule sync for account %s: %v", acc.ID, err)
-			continue
-		}
-
-		scheduledCount++
-		log.Printf("Scheduled sync for account %s (interval: %v, schedule_id: %s)", acc.ID, interval, scheduleID)
+		accountNames = append(accountNames, acc.ID)
 	}
 
-	log.Printf("Sync worker started with %d scheduled accounts", scheduledCount)
+	// Schedule all tasks in one batch
+	if len(scheduledTasks) > 0 {
+		scheduleIDs, err := w.Dispatcher.ScheduleTaskMultiple(ctx, scheduledTasks)
+		if err != nil {
+			log.Printf("Warning: Some scheduled tasks failed: %v", err)
+		}
+
+		// Log successfully scheduled accounts
+		for i, scheduleID := range scheduleIDs {
+			if i < len(accountNames) {
+				log.Printf("Scheduled sync for account %s (schedule_id: %s)",
+					accountNames[i], scheduleID)
+			}
+		}
+	}
+
+	log.Printf("Sync worker started with %d scheduled accounts", len(scheduledTasks))
 	return nil
 }
 

@@ -187,6 +187,54 @@ func (s *TaskScheduler) ScheduleTask(ctx context.Context, taskID string, payload
 	return scheduleID, nil
 }
 
+// CreateTaskMultiple creates multiple tasks for immediate or delayed execution.
+func (s *TaskScheduler) CreateTaskMultiple(ctx context.Context, tasks []TaskCreation) ([]string, error) {
+	if len(tasks) == 0 {
+		return []string{}, nil
+	}
+
+	taskIDs := make([]string, 0, len(tasks))
+	var errs []error
+
+	for _, task := range tasks {
+		taskID, err := s.CreateTask(ctx, task.TaskID, task.Payload, task.Options)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("task %s: %w", task.TaskID, err))
+		} else {
+			taskIDs = append(taskIDs, taskID)
+		}
+	}
+
+	if len(errs) > 0 {
+		return taskIDs, fmt.Errorf("create multiple tasks failed: %v", errs)
+	}
+	return taskIDs, nil
+}
+
+// ScheduleTaskMultiple schedules multiple recurring tasks.
+func (s *TaskScheduler) ScheduleTaskMultiple(ctx context.Context, tasks []ScheduledTask) ([]string, error) {
+	if len(tasks) == 0 {
+		return []string{}, nil
+	}
+
+	scheduleIDs := make([]string, 0, len(tasks))
+	var errs []error
+
+	for _, task := range tasks {
+		scheduleID, err := s.ScheduleTask(ctx, task.TaskID, task.Payload, task.Interval, task.Options)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("task %s: %w", task.TaskID, err))
+		} else {
+			scheduleIDs = append(scheduleIDs, scheduleID)
+		}
+	}
+
+	if len(errs) > 0 {
+		return scheduleIDs, fmt.Errorf("schedule multiple tasks failed: %v", errs)
+	}
+	return scheduleIDs, nil
+}
+
 // CancelSchedule stops a scheduled task from running.
 func (s *TaskScheduler) CancelSchedule(ctx context.Context, scheduleID string) error {
 	s.mu.Lock()

@@ -78,15 +78,40 @@ type TaskCreator interface {
 	// Returns the task ID for tracking.
 	CreateTask(ctx context.Context, taskID string, payload []byte, opts *CreateTaskOptions) (string, error)
 
+	// CreateTaskMultiple creates multiple tasks for immediate or delayed execution.
+	// Returns task IDs for tracking in the same order as input.
+	// Returns aggregated errors if any fail (successful creations are not rolled back).
+	CreateTaskMultiple(ctx context.Context, tasks []TaskCreation) ([]string, error)
+
 	// ScheduleTask creates a recurring task that runs at the specified interval.
 	// Returns a schedule ID that can be used to cancel the schedule.
 	ScheduleTask(ctx context.Context, taskID string, payload []byte, interval time.Duration, opts *ScheduleTaskOptions) (string, error)
+
+	// ScheduleTaskMultiple schedules multiple recurring tasks.
+	// Returns schedule IDs for tracking in the same order as input.
+	// Returns aggregated errors if any fail (successful schedules are not rolled back).
+	ScheduleTaskMultiple(ctx context.Context, tasks []ScheduledTask) ([]string, error)
 
 	// CancelSchedule stops a scheduled task from running.
 	CancelSchedule(ctx context.Context, scheduleID string) error
 
 	// GetSchedule returns information about a scheduled task.
 	GetSchedule(ctx context.Context, scheduleID string) (*ScheduleInfo, error)
+}
+
+// TaskCreation represents a task to be created.
+type TaskCreation struct {
+	TaskID  string             `json:"task_id"`
+	Payload []byte             `json:"payload"`
+	Options *CreateTaskOptions `json:"options,omitempty"`
+}
+
+// ScheduledTask represents a task to be scheduled.
+type ScheduledTask struct {
+	TaskID   string               `json:"task_id"`
+	Payload  []byte               `json:"payload"`
+	Interval time.Duration        `json:"interval"`
+	Options  *ScheduleTaskOptions `json:"options,omitempty"`
 }
 
 // CreateTaskOptions holds options for task creation.

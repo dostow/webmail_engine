@@ -384,6 +384,56 @@ func (d *DispatcherImpl) GetSchedule(ctx context.Context, scheduleID string) (*S
 	return d.scheduler.GetSchedule(ctx, scheduleID)
 }
 
+// CreateTaskMultiple creates multiple tasks for immediate or delayed execution.
+// Returns task IDs for tracking in the same order as input.
+func (d *DispatcherImpl) CreateTaskMultiple(ctx context.Context, tasks []TaskCreation) ([]string, error) {
+	if len(tasks) == 0 {
+		return []string{}, nil
+	}
+
+	taskIDs := make([]string, 0, len(tasks))
+	var errs []error
+
+	for _, task := range tasks {
+		taskID, err := d.CreateTask(ctx, task.TaskID, task.Payload, task.Options)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("task %s: %w", task.TaskID, err))
+		} else {
+			taskIDs = append(taskIDs, taskID)
+		}
+	}
+
+	if len(errs) > 0 {
+		return taskIDs, fmt.Errorf("create multiple tasks failed: %v", errs)
+	}
+	return taskIDs, nil
+}
+
+// ScheduleTaskMultiple schedules multiple recurring tasks.
+// Returns schedule IDs for tracking in the same order as input.
+func (d *DispatcherImpl) ScheduleTaskMultiple(ctx context.Context, tasks []ScheduledTask) ([]string, error) {
+	if len(tasks) == 0 {
+		return []string{}, nil
+	}
+
+	scheduleIDs := make([]string, 0, len(tasks))
+	var errs []error
+
+	for _, task := range tasks {
+		scheduleID, err := d.ScheduleTask(ctx, task.TaskID, task.Payload, task.Interval, task.Options)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("task %s: %w", task.TaskID, err))
+		} else {
+			scheduleIDs = append(scheduleIDs, scheduleID)
+		}
+	}
+
+	if len(errs) > 0 {
+		return scheduleIDs, fmt.Errorf("schedule multiple tasks failed: %v", errs)
+	}
+	return scheduleIDs, nil
+}
+
 // startManagedMode initializes the managed worker pool.
 func (d *DispatcherImpl) startManagedMode(ctx context.Context) error {
 	d.managedDispatcher = NewManagedDispatcher(d.tasks, d.config, d.logger)

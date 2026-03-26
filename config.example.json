@@ -65,6 +65,8 @@
   },
   "webhook": {
     "enabled": true,
+    "url": "https://your-server.com/webhooks/mail",
+    "secret_key": "your-hmac-secret-key-change-in-production",
     "max_retries": 3,
     "retry_backoff": "1m",
     "timeout": "30s",

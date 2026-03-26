@@ -89,6 +89,7 @@ func main() {
 	dispatcher.Register(&workers.SpamCheckTask{})
 	dispatcher.Register(&workers.SyncTask{})
 	dispatcher.Register(&workers.EnvelopeProcessorTask{})
+	dispatcher.Register(&workers.WebhookNotifierTask{})
 
 	log.Printf("Registered tasks: %v", dispatcher.GetRegisteredTasks())
 

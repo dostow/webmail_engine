@@ -1,7 +1,24 @@
 {
   "worker_type": "taskmaster",
   "worker_id": "taskmaster-worker-1",
-  "operational_mode": "${OPERATIONAL_MODE:-managed}",
+  "dispatch": {
+    "type": "${DISPATCH_TYPE:-managed}",
+    "addr": "${REST_ADDR:-:8080}",
+    "redis_url": "${REDIS_URL:-redis://localhost:6379}",
+    "queue_name": "${QUEUE_NAME:-webmail_tasks}"
+  },
+  "execution": {
+    "mode": "${EXECUTION_MODE:-managed}",
+    "worker_count": 4,
+    "task_timeout": 30000000000,
+    "queue_size": 100,
+    "redis_url": "${REDIS_URL:-redis://localhost:6379}",
+    "result_backend": "${RESULT_BACKEND:-redis://localhost:6379}"
+  },
+  "scheduler": {
+    "enabled": false,
+    "schedule_accounts": false
+  },
   "shutdown_timeout": 30000000000,
   "queue": {
     "type": "memory",
@@ -14,6 +31,6 @@
   "webhook": {
     "url": "${WEBHOOK_URL:-}",
     "secret_key": "${WEBHOOK_SECRET:-}",
-    "enabled": true
+    "enabled": false
   }
 }

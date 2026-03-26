@@ -6,8 +6,9 @@
 *.dylib
 main
 webmail_engine
-sync_worker_taskmaster
-processor_worker_taskmaster
+./sync_worker_taskmaster
+./processor_worker_taskmaster
+./taskmaster_worker
 cmd/taskmaster_worker/taskmaster_worker
 
 # Test binary
@@ -48,5 +49,6 @@ tmp/
 .bra.toml
 config.json.*
 *.rdb
-config.json
 __debug*
+# Ignore config.json at root level but allow in cmd directories
+/config.json

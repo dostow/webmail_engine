@@ -1,0 +1,61 @@
+{
+  "worker_type": "sync",
+  "worker_id": "sync-worker-1",
+  "dispatch": {
+    "type": "${DISPATCH_TYPE:-managed}",
+    "addr": "${REST_ADDR:-:8080}",
+    "redis_url": "${REDIS_URL:-redis://localhost:6379}",
+    "queue_name": "${QUEUE_NAME:-webmail_sync_tasks}"
+  },
+  "execution": {
+    "mode": "${EXECUTION_MODE:-managed}",
+    "worker_count": 4,
+    "task_timeout": 300000000000,
+    "queue_size": 100,
+    "redis_url": "${REDIS_URL:-redis://localhost:6379}",
+    "result_backend": "${RESULT_BACKEND:-redis://localhost:6379}"
+  },
+  "scheduler": {
+    "enabled": true,
+    "schedule_accounts": true
+  },
+  "shutdown_timeout": 30000000000,
+  "queue": {
+    "type": "memory",
+    "redis_url": "${REDIS_URL:-redis://localhost:6379}",
+    "high_priority": "envelope_high",
+    "normal_priority": "envelope_normal",
+    "low_priority": "envelope_low"
+  },
+  "store": {
+    "type": "sql",
+    "sql": {
+      "driver": "${DB_DRIVER:-sqlite}",
+      "dsn": "${DATABASE_URL:-./data/webmail.db}",
+      "max_connections": 10,
+      "min_idle": 2,
+      "busy_timeout_ms": 5000
+    }
+  },
+  "logging": {
+    "level": "${LOG_LEVEL:-info}",
+    "format": "${LOG_FORMAT:-text}",
+    "output_path": "stdout",
+    "enable_json": false
+  },
+  "security": {
+    "encryption_key": "${ENCRYPTION_KEY:-}"
+  },
+  "imap": {
+    "host": "",
+    "port": 993,
+    "username": "",
+    "password": "",
+    "encryption": "ssl"
+  },
+  "webhook": {
+    "url": "${WEBHOOK_URL:-}",
+    "secret_key": "${WEBHOOK_SECRET:-}",
+    "enabled": false
+  }
+}

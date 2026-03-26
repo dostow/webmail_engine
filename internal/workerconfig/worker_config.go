@@ -11,17 +11,46 @@ import (
 )
 
 // WorkerConfig holds configuration for standalone workers (sync/processor)
+// Supports separate dispatch (intake) and execution (processing) configuration.
 type WorkerConfig struct {
-	WorkerType      string                `json:"worker_type"`                // "sync", "processor", "memory-worker"
-	WorkerID        string                `json:"worker_id"`                  // Unique worker identifier
-	OperationalMode string                `json:"operational_mode,omitempty"` // "scheduled_managed", "rest", "machinery"
-	Queue           QueueConfig           `json:"queue"`
+	WorkerType      string                `json:"worker_type"` // "sync", "processor", "taskmaster"
+	WorkerID        string                `json:"worker_id"`   // Unique worker identifier
+	Dispatch        DispatchConfig        `json:"dispatch"`    // How tasks are received
+	Execution       ExecutionConfig       `json:"execution"`   // How tasks are processed
+	Queue           QueueConfig           `json:"queue"`       // Legacy: for backward compatibility
 	Store           config.StoreConfig    `json:"store"`
 	Logging         config.LoggingConfig  `json:"logging"`
 	ShutdownTimeout time.Duration         `json:"shutdown_timeout"`
 	Security        config.SecurityConfig `json:"security"`
-	IMAP            config.IMAPConfig     `json:"imap"`
+	IMAP            config.IMAPConfig     `json:"imap,omitempty"`
 	Webhook         WebhookConfig         `json:"webhook,omitempty"`
+	Scheduler       SchedulerConfig       `json:"scheduler,omitempty"`
+}
+
+// DispatchConfig configures how tasks are received/intake.
+// Supports: managed (local), rest (HTTP), machinery (Redis/RabbitMQ)
+type DispatchConfig struct {
+	Type      string `json:"type"`                 // "managed", "rest", "machinery"
+	Addr      string `json:"addr,omitempty"`       // HTTP address for rest mode
+	RedisURL  string `json:"redis_url,omitempty"`  // Redis URL for machinery mode
+	QueueName string `json:"queue_name,omitempty"` // Queue name for machinery mode
+}
+
+// ExecutionConfig configures how tasks are executed/processed.
+// Supports: managed (local worker pool), machinery (remote workers)
+type ExecutionConfig struct {
+	Mode          string        `json:"mode"`                     // "managed", "machinery"
+	WorkerCount   int           `json:"worker_count"`             // For managed mode
+	TaskTimeout   time.Duration `json:"task_timeout"`             // Default task timeout
+	QueueSize     int           `json:"queue_size"`               // Queue buffer size
+	RedisURL      string        `json:"redis_url,omitempty"`      // For machinery execution
+	ResultBackend string        `json:"result_backend,omitempty"` // Machinery result backend
+}
+
+// SchedulerConfig configures task scheduling behavior.
+type SchedulerConfig struct {
+	Enabled          bool `json:"enabled"`           // Enable task scheduling
+	ScheduleAccounts bool `json:"schedule_accounts"` // Auto-schedule accounts (sync_worker)
 }
 
 // WebhookConfig holds webhook notification configuration
@@ -41,12 +70,25 @@ type QueueConfig struct {
 	LowPriority    string `json:"low_priority"`
 }
 
-// DefaultWorkerConfig returns default worker configuration
+// DefaultWorkerConfig returns default worker configuration.
+// Default: managed dispatch + managed execution (single-instance, local processing).
 func DefaultWorkerConfig(workerType string) *WorkerConfig {
 	return &WorkerConfig{
-		WorkerType:      workerType, // Can be empty for combined workers
-		WorkerID:        fmt.Sprintf("%s-%d", workerType, time.Now().UnixNano()),
-		OperationalMode: "scheduled_managed", // Default mode
+		WorkerType: workerType,
+		WorkerID:   fmt.Sprintf("%s-%d", workerType, time.Now().UnixNano()),
+		Dispatch: DispatchConfig{
+			Type: "managed", // Default: local task creation
+		},
+		Execution: ExecutionConfig{
+			Mode:        "managed", // Default: local worker pool
+			WorkerCount: 4,
+			TaskTimeout: 30 * time.Second,
+			QueueSize:   100,
+		},
+		Scheduler: SchedulerConfig{
+			Enabled:          true,
+			ScheduleAccounts: workerType == "sync", // Auto-schedule for sync workers
+		},
 		ShutdownTimeout: 30 * time.Second,
 		Queue: QueueConfig{
 			Type:           "memory",
@@ -142,4 +184,49 @@ func (w *WorkerConfig) ToInternalConfig() *config.Config {
 	}
 
 	return cfg
+}
+
+// GetExecutionMode returns the taskmaster ExecutionMode based on Dispatch and Execution config.
+// Maps the new separated config to the existing ExecutionMode enum.
+func (w *WorkerConfig) GetExecutionMode() string {
+	// Execution mode determines how tasks are processed
+	switch w.Execution.Mode {
+	case "machinery":
+		return "machinery"
+	case "managed":
+		// For managed execution, dispatch type determines intake method
+		switch w.Dispatch.Type {
+		case "rest":
+			return "rest"
+		case "machinery":
+			// Machinery dispatch with managed execution = receive from Redis, execute locally
+			return "machinery"
+		default:
+			return "managed"
+		}
+	default:
+		return "managed"
+	}
+}
+
+// GetDispatchConfig returns dispatch-specific configuration for the dispatcher.
+func (w *WorkerConfig) GetDispatchConfig() (addr string, redisURL string, queueName string) {
+	switch w.Dispatch.Type {
+	case "rest":
+		if w.Dispatch.Addr != "" {
+			addr = w.Dispatch.Addr
+		} else {
+			addr = ":8080"
+		}
+	case "machinery":
+		redisURL = w.Dispatch.RedisURL
+		if redisURL == "" {
+			redisURL = w.Queue.RedisURL
+		}
+		queueName = w.Dispatch.QueueName
+		if queueName == "" {
+			queueName = "webmail_tasks"
+		}
+	}
+	return addr, redisURL, queueName
 }

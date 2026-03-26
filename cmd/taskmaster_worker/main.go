@@ -103,13 +103,17 @@ func (w *TaskmasterWorker) Stop() error {
 }
 
 // createDispatcher creates a taskmaster dispatcher with mode-specific configuration.
+// Uses the new separated Dispatch and Execution config structure.
 func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerConfig, _ string) taskmaster.FullDispatcher {
+	// Get dispatch-specific configuration
+	addr, redisURL, queueName := cfg.GetDispatchConfig()
+
 	switch mode {
 	case taskmaster.RESTMode:
 		return taskmaster.NewDispatcher(
 			taskmaster.WithMode(mode),
 			taskmaster.WithRESTConfig(&taskmaster.RESTConfig{
-				Addr:                ":8080",
+				Addr:                addr,
 				BasePath:            "/api/v1/tasks",
 				EnableSyncExecution: true,
 			}),
@@ -119,19 +123,31 @@ func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerCon
 		return taskmaster.NewDispatcher(
 			taskmaster.WithMode(mode),
 			taskmaster.WithMachineryConfig(&taskmaster.MachineryConfig{
-				BrokerURL:         cfg.Queue.RedisURL,
-				ResultBackend:     cfg.Queue.RedisURL,
-				DefaultQueue:      "webmail_tasks",
+				BrokerURL:         redisURL,
+				ResultBackend:     cfg.Execution.ResultBackend,
+				DefaultQueue:      queueName,
 				DefaultRetryCount: 3,
 			}),
 			taskmaster.WithLogger(&standardLogger{}),
 		)
 	default: // ManagedMode
+		workerCount := cfg.Execution.WorkerCount
+		if workerCount <= 0 {
+			workerCount = 4
+		}
+		taskTimeout := cfg.Execution.TaskTimeout
+		if taskTimeout <= 0 {
+			taskTimeout = 30 * time.Second
+		}
+		queueSize := cfg.Execution.QueueSize
+		if queueSize <= 0 {
+			queueSize = 100
+		}
 		return taskmaster.NewDispatcher(
 			taskmaster.WithMode(mode),
-			taskmaster.WithWorkerCount(4),
-			taskmaster.WithTaskTimeout(30*time.Second),
-			taskmaster.WithQueueSize(100),
+			taskmaster.WithWorkerCount(workerCount),
+			taskmaster.WithTaskTimeout(taskTimeout),
+			taskmaster.WithQueueSize(queueSize),
 			taskmaster.WithLogger(&standardLogger{}),
 		)
 	}
@@ -150,17 +166,23 @@ func toTaskmasterMode(mode string) taskmaster.ExecutionMode {
 }
 
 // resolveOperationalMode implements precedence rules: CLI > Config > Default.
+// Supports both legacy mode names (scheduled_managed) and new names (managed).
 func resolveOperationalMode(cliMode, configMode string) string {
 	validModes := map[string]bool{
-		"managed":   true,
-		"rest":      true,
-		"machinery": true,
+		"managed":           true,
+		"scheduled_managed": true, // Legacy alias for managed
+		"rest":              true,
+		"machinery":         true,
 	}
 
 	// CLI argument takes precedence
-	if cliMode != "" && cliMode != "managed" {
+	if cliMode != "" {
 		if !validModes[cliMode] {
 			log.Fatalf("Invalid mode '%s'. Valid modes: managed, rest, machinery", cliMode)
+		}
+		// Normalize legacy mode name
+		if cliMode == "scheduled_managed" {
+			return "managed"
 		}
 		return cliMode
 	}
@@ -169,6 +191,10 @@ func resolveOperationalMode(cliMode, configMode string) string {
 	if configMode != "" {
 		if !validModes[configMode] {
 			log.Fatalf("Invalid config mode '%s'. Valid modes: managed, rest, machinery", configMode)
+		}
+		// Normalize legacy mode name
+		if configMode == "scheduled_managed" {
+			return "managed"
 		}
 		return configMode
 	}
@@ -200,7 +226,7 @@ func (l *standardLogger) Warn(msg string, keysAndValues ...interface{}) {
 func main() {
 	// Parse command line flags
 	configPath := flag.String("config", "", "Path to configuration file")
-	mode := flag.String("mode", "managed", "Operational mode: managed, rest, machinery")
+	mode := flag.String("mode", "", "Operational mode: managed, rest, machinery (overrides config)")
 	flag.Parse()
 
 	// Load or create configuration
@@ -226,13 +252,14 @@ func main() {
 	}
 
 	// Resolve mode: CLI > Config > Default
-	operationalMode := resolveOperationalMode(*mode, cfg.OperationalMode)
-	cfg.OperationalMode = operationalMode
+	// Use GetExecutionMode() which considers both Dispatch and Execution config
+	operationalMode := resolveOperationalMode(*mode, cfg.GetExecutionMode())
 
-	// Log startup info
+	// Log startup info with dispatch/execution details
 	log.Printf("=== Taskmaster Worker ===")
-	log.Printf("Worker ID:       %s", cfg.WorkerID)
-	log.Printf("Operational Mode: %s", operationalMode)
+	log.Printf("Worker ID:  %s", cfg.WorkerID)
+	log.Printf("Dispatch:   %s", cfg.Dispatch.Type)
+	log.Printf("Execution:  %s (%s mode)", cfg.Execution.Mode, operationalMode)
 	log.Printf("=========================")
 
 	// Create and run taskmaster worker

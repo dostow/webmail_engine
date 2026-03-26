@@ -89,6 +89,16 @@ func NewSyncWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig, mode string) (*
 		return nil, err
 	}
 
+	// Register webhook notifier task (optional - for sending notifications)
+	webhookNotifier := &workers.WebhookNotifierTask{
+		WebhookURL: cfg.Webhook.URL,
+		SecretKey:  cfg.Webhook.SecretKey,
+	}
+	if err := dispatcher.Register(webhookNotifier); err != nil {
+		log.Printf("Warning: Failed to register webhook notifier: %v", err)
+		// Continue without webhook support
+	}
+
 	return &SyncWorkerWithTaskmaster{
 		Config:         cfg,
 		Store:          accountStore,
@@ -311,33 +321,32 @@ func createQueue(dispatcher taskmaster.TaskDispatcher) envelopequeue.EnvelopeQue
 	//
 	// Note: "sync" task is NOT included to avoid infinite loop
 	// (sync -> enqueue -> sync -> enqueue -> ...)
-	config := &envelopequeue.TaskmasterQueueConfig{
-		Tasks: []envelopequeue.TaskRoute{
-			{
-				TaskID:  "envelope_processor",
-				Enabled: true,
-				Config: map[string]interface{}{
-					"fetch_body":          true,
-					"extract_links":       false, // Can be enabled per account
-					"process_attachments": false, // Can be enabled per account
-				},
+
+	// Build task pipeline
+	tasks := []envelopequeue.TaskRoute{
+		{
+			TaskID:  "envelope_processor",
+			Enabled: true,
+			Config: map[string]interface{}{
+				"fetch_body":          true,
+				"extract_links":       false, // Can be enabled per account
+				"process_attachments": false, // Can be enabled per account
 			},
-			// Add more workers as needed:
-			// {
-			// 	TaskID:  "link_extractor",
-			// 	Enabled: true,
-			// 	Config: map[string]interface{}{
-			// 		"extract_images": true,
-			// 	},
-			// },
-			// {
-			// 	TaskID:  "webhook_notifier",
-			// 	Enabled: true,
-			// 	Config: map[string]interface{}{
-			// 		"url": "https://your-webhook-url.com/notify",
-			// 	},
-			// },
 		},
+	}
+
+	// Add webhook notifier if configured
+	// Note: WebhookNotifierTask must be registered with the dispatcher
+	tasks = append(tasks, envelopequeue.TaskRoute{
+		TaskID:  "webhook_notifier",
+		Enabled: true, // Set to false to disable webhooks
+		Config: map[string]interface{}{
+			"event_type": "envelope.received",
+		},
+	})
+
+	config := &envelopequeue.TaskmasterQueueConfig{
+		Tasks: tasks,
 	}
 
 	return envelopequeue.NewTaskmasterEnvelopeQueue(dispatcher, config)

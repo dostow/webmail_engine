@@ -21,6 +21,14 @@ type WorkerConfig struct {
 	ShutdownTimeout time.Duration         `json:"shutdown_timeout"`
 	Security        config.SecurityConfig `json:"security"`
 	IMAP            config.IMAPConfig     `json:"imap"`
+	Webhook         WebhookConfig         `json:"webhook,omitempty"`
+}
+
+// WebhookConfig holds webhook notification configuration
+type WebhookConfig struct {
+	URL       string `json:"url"`        // Webhook endpoint URL
+	SecretKey string `json:"secret_key"` // HMAC signing key
+	Enabled   bool   `json:"enabled"`    // Enable webhook notifications
 }
 
 // QueueConfig holds message queue configuration

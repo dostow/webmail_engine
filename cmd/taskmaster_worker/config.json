@@ -5,15 +5,15 @@
   "shutdown_timeout": 30000000000,
   "queue": {
     "type": "memory",
-    "redis_url": "redis://localhost:6379"
+    "redis_url": "${REDIS_URL:-redis://localhost:6379}"
   },
   "logging": {
-    "level": "info",
-    "format": "text"
+    "level": "${LOG_LEVEL:-info}",
+    "format": "${LOG_FORMAT:-text}"
   },
   "webhook": {
-    "url": "",
-    "secret_key": "",
-    "enabled": false
+    "url": "${WEBHOOK_URL:-}",
+    "secret_key": "${WEBHOOK_SECRET:-}",
+    "enabled": "${WEBHOOK_ENABLED:-false}"
   }
 }

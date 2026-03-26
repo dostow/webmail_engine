@@ -1,0 +1,19 @@
+{
+  "worker_type": "sync",
+  "worker_id": "taskmaster-worker-1",
+  "operational_mode": "managed",
+  "shutdown_timeout": 30000000000,
+  "queue": {
+    "type": "memory",
+    "redis_url": "redis://localhost:6379"
+  },
+  "logging": {
+    "level": "info",
+    "format": "text"
+  },
+  "webhook": {
+    "url": "",
+    "secret_key": "",
+    "enabled": false
+  }
+}

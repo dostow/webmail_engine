@@ -73,8 +73,11 @@ func NewSyncWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig, mode string) (*
 
 	dispatcher := createDispatcher(execMode, cfg, mode)
 
+	// Check if webhook is configured for queue pipeline
+	webhookConfigured := cfg.Webhook.URL != ""
+
 	// Create envelope queue that uses taskmaster dispatcher
-	queue := createQueue(dispatcher)
+	queue := createQueue(dispatcher, webhookConfigured)
 
 	// Create sync service
 	syncService := service.NewSyncService(accountService, sessionPool, queue)
@@ -307,7 +310,7 @@ func (w *SyncWorkerWithTaskmaster) Stop() error {
 	return nil
 }
 
-func createQueue(dispatcher taskmaster.TaskDispatcher) envelopequeue.EnvelopeQueue {
+func createQueue(dispatcher taskmaster.TaskDispatcher, webhookConfigured bool) envelopequeue.EnvelopeQueue {
 	// Configure envelope processing pipeline with all workers EXCEPT sync.
 	// Sync task fetches envelopes and enqueues them for processing.
 	// The envelope queue then dispatches to downstream workers.
@@ -316,7 +319,7 @@ func createQueue(dispatcher taskmaster.TaskDispatcher) envelopequeue.EnvelopeQue
 	// - envelope_processor: Processes envelope metadata, fetches message body
 	// - link_extractor: Extracts links from message bodies
 	// - attachment_processor: Processes attachments
-	// - webhook_notifier: Sends webhooks for new messages
+	// - webhook_notifier: Sends webhooks for new messages (only if URL configured)
 	// - spam_classifier: Classifies spam (if enabled)
 	//
 	// Note: "sync" task is NOT included to avoid infinite loop
@@ -335,15 +338,20 @@ func createQueue(dispatcher taskmaster.TaskDispatcher) envelopequeue.EnvelopeQue
 		},
 	}
 
-	// Add webhook notifier if configured
-	// Note: WebhookNotifierTask must be registered with the dispatcher
-	tasks = append(tasks, envelopequeue.TaskRoute{
-		TaskID:  "webhook_notifier",
-		Enabled: true, // Set to false to disable webhooks
-		Config: map[string]interface{}{
-			"event_type": "envelope.received",
-		},
-	})
+	// Add webhook notifier only if webhook URL is configured
+	// Signature is optional - only added if secret_key is provided
+	if webhookConfigured {
+		tasks = append(tasks, envelopequeue.TaskRoute{
+			TaskID:  "webhook_notifier",
+			Enabled: true,
+			Config: map[string]interface{}{
+				"event_type": "envelope.received",
+			},
+		})
+		log.Println("Webhook notifier enabled in envelope processing pipeline")
+	} else {
+		log.Println("Webhook notifier disabled (no URL configured)")
+	}
 
 	config := &envelopequeue.TaskmasterQueueConfig{
 		Tasks: tasks,

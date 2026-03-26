@@ -298,7 +298,49 @@ func (w *SyncWorkerWithTaskmaster) Stop() error {
 }
 
 func createQueue(dispatcher taskmaster.TaskDispatcher) envelopequeue.EnvelopeQueue {
-	return envelopequeue.NewTaskmasterEnvelopeQueue(dispatcher, envelopequeue.DefaultTaskmasterQueueConfig())
+	// Configure envelope processing pipeline with all workers EXCEPT sync.
+	// Sync task fetches envelopes and enqueues them for processing.
+	// The envelope queue then dispatches to downstream workers.
+	//
+	// Available workers (configure based on your needs):
+	// - envelope_processor: Processes envelope metadata, fetches message body
+	// - link_extractor: Extracts links from message bodies
+	// - attachment_processor: Processes attachments
+	// - webhook_notifier: Sends webhooks for new messages
+	// - spam_classifier: Classifies spam (if enabled)
+	//
+	// Note: "sync" task is NOT included to avoid infinite loop
+	// (sync -> enqueue -> sync -> enqueue -> ...)
+	config := &envelopequeue.TaskmasterQueueConfig{
+		Tasks: []envelopequeue.TaskRoute{
+			{
+				TaskID:  "envelope_processor",
+				Enabled: true,
+				Config: map[string]interface{}{
+					"fetch_body":          true,
+					"extract_links":       false, // Can be enabled per account
+					"process_attachments": false, // Can be enabled per account
+				},
+			},
+			// Add more workers as needed:
+			// {
+			// 	TaskID:  "link_extractor",
+			// 	Enabled: true,
+			// 	Config: map[string]interface{}{
+			// 		"extract_images": true,
+			// 	},
+			// },
+			// {
+			// 	TaskID:  "webhook_notifier",
+			// 	Enabled: true,
+			// 	Config: map[string]interface{}{
+			// 		"url": "https://your-webhook-url.com/notify",
+			// 	},
+			// },
+		},
+	}
+
+	return envelopequeue.NewTaskmasterEnvelopeQueue(dispatcher, config)
 }
 
 func createStore(cfg *workerconfig.WorkerConfig) (store.AccountStore, error) {

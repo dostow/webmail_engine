@@ -538,6 +538,11 @@ type TaskDispatcher interface {
 	// CreateTask creates a new task for immediate or scheduled execution.
 	CreateTask(ctx context.Context, taskID string, payload []byte, opts *CreateTaskOptions) (string, error)
 
+	// CreateTaskMultiple creates multiple tasks for immediate or delayed execution.
+	// Returns task IDs for tracking in the same order as input.
+	// Returns aggregated errors if any fail (successful creations are not rolled back).
+	CreateTaskMultiple(ctx context.Context, tasks []TaskCreation) ([]string, error)
+
 	// ScheduleTask creates a recurring task that runs at the specified interval.
 	ScheduleTask(ctx context.Context, taskID string, payload []byte, interval time.Duration, opts *ScheduleTaskOptions) (string, error)
 }

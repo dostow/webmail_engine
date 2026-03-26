@@ -64,9 +64,9 @@ func NewTaskmasterEnvelopeQueue(dispatcher taskmaster.TaskDispatcher, cfg *Taskm
 	}
 }
 
-// Enqueue dispatches the envelope to all configured tasks in the pipeline.
-// Each envelope is dispatched to every enabled task sequentially.
-// If any task dispatch fails, the error is returned but previous dispatches are not rolled back.
+// Enqueue creates tasks for all configured workers in the pipeline.
+// Each envelope is dispatched to every enabled task using CreateTaskMultiple for tracking.
+// Returns error if task creation fails for any worker.
 func (q *TaskmasterEnvelopeQueue) Enqueue(ctx context.Context, envelope *models.EnvelopeQueueItem, opts *EnqueueOptions) error {
 	if q.closed {
 		return ErrQueueUnavailable
@@ -76,8 +76,8 @@ func (q *TaskmasterEnvelopeQueue) Enqueue(ctx context.Context, envelope *models.
 		return fmt.Errorf("no tasks configured in pipeline")
 	}
 
-	// Build all task dispatches
-	dispatches := make([]taskmaster.TaskDispatch, 0, len(q.tasks))
+	// Build all task creations
+	taskCreations := make([]taskmaster.TaskCreation, 0, len(q.tasks))
 	for _, taskRoute := range q.tasks {
 		payload, err := q.buildPayload(taskRoute, envelope, opts)
 		if err != nil {
@@ -89,15 +89,42 @@ func (q *TaskmasterEnvelopeQueue) Enqueue(ctx context.Context, envelope *models.
 			return fmt.Errorf("failed to marshal payload for task %s: %w", taskRoute.TaskID, err)
 		}
 
-		dispatches = append(dispatches, taskmaster.TaskDispatch{
+		// Build CreateTaskOptions from EnqueueOptions
+		createOpts := &taskmaster.CreateTaskOptions{
+			Metadata: map[string]string{
+				"envelope_id": envelope.ID,
+				"account_id":  envelope.AccountID,
+				"folder_name": envelope.FolderName,
+				"priority":    string(envelope.Priority),
+			},
+		}
+
+		if opts != nil {
+			if opts.Delay > 0 {
+				createOpts.Delay = opts.Delay
+			}
+			if opts.MaxRetries > 0 {
+				createOpts.MaxRetries = opts.MaxRetries
+			}
+		}
+
+		taskCreations = append(taskCreations, taskmaster.TaskCreation{
 			TaskID:  taskRoute.TaskID,
 			Payload: payloadBytes,
+			Options: createOpts,
 		})
 	}
 
-	// Dispatch all tasks at once using the dispatcher's multi-dispatch method
-	if err := q.dispatcher.DispatchMultiple(ctx, dispatches); err != nil {
-		return fmt.Errorf("failed to dispatch envelope tasks: %w", err)
+	// Create all tasks at once using the dispatcher's batch create method
+	taskIDs, err := q.dispatcher.CreateTaskMultiple(ctx, taskCreations)
+	if err != nil {
+		return fmt.Errorf("failed to create envelope tasks: %w", err)
+	}
+
+	// Log task IDs for tracking (optional, can be removed in production)
+	if len(taskIDs) > 0 {
+		// Tasks created successfully - taskIDs can be stored for tracking if needed
+		_ = taskIDs
 	}
 
 	return nil

@@ -1,7 +1,7 @@
 {
   "worker_type": "taskmaster",
   "worker_id": "taskmaster-worker-1",
-  "operational_mode": "managed",
+  "operational_mode": "${OPERATIONAL_MODE:-managed}",
   "shutdown_timeout": 30000000000,
   "queue": {
     "type": "memory",
@@ -14,6 +14,6 @@
   "webhook": {
     "url": "${WEBHOOK_URL:-}",
     "secret_key": "${WEBHOOK_SECRET:-}",
-    "enabled": "${WEBHOOK_ENABLED:-false}"
+    "enabled": true
   }
 }

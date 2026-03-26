@@ -212,9 +212,17 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to load config: %v", err)
 		}
+		// Expand environment variables after loading
+		config.ExpandEnvVars(cfg)
 	} else {
 		cfg = workerconfig.DefaultWorkerConfig("taskmaster")
 		config.ExpandEnvVars(cfg)
+	}
+
+	// Override webhook.enabled from environment if set
+	// (boolean env vars need special handling since JSON can't expand them)
+	if webhookEnabled := os.Getenv("WEBHOOK_ENABLED"); webhookEnabled != "" {
+		cfg.Webhook.Enabled = webhookEnabled == "true" || webhookEnabled == "1" || webhookEnabled == "yes"
 	}
 
 	// Resolve mode: CLI > Config > Default

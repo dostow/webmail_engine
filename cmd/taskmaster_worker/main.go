@@ -3,125 +3,179 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"webmail_engine/internal/config"
 	"webmail_engine/internal/taskmaster"
+	"webmail_engine/internal/workerconfig"
 	"webmail_engine/internal/workers"
 )
 
-// This is an example worker using the new taskmaster system.
-// It demonstrates how to initialize and use the Dispatcher with different execution modes.
+// TaskmasterWorker is a generic taskmaster worker that supports multiple execution modes.
+// It demonstrates how to use the taskmaster system with configurable tasks.
 //
-// Usage:
-//   go run cmd/taskmaster_worker/main.go -mode managed -workers 4
-//   go run cmd/taskmaster_worker/main.go -mode rest -addr :8080
-//   go run cmd/taskmaster_worker/main.go -mode machinery -broker redis://localhost:6379
+// Operational Modes:
+// - managed: Internal worker pool with goroutines (default)
+// - rest: HTTP API endpoints for task submission
+// - machinery: Distributed task processing via Redis/RabbitMQ
+type TaskmasterWorker struct {
+	Config     *workerconfig.WorkerConfig
+	Dispatcher taskmaster.FullDispatcher
+	Mode       string
+}
 
-func main() {
-	// Parse command line flags
-	mode := flag.String("mode", "managed", "Execution mode: managed, rest, machinery")
-	workerCount := flag.Int("workers", 4, "Number of worker goroutines (for managed mode)")
-	taskTimeout := flag.Duration("timeout", 30*time.Second, "Default task timeout")
-	queueSize := flag.Int("queue-size", 100, "Task queue size (for managed mode)")
-	addr := flag.String("addr", ":8080", "HTTP server address (for rest mode)")
-	brokerURL := flag.String("broker", "redis://localhost:6379", "Broker URL (for machinery mode)")
-	flag.Parse()
-
-	// Create logger (using standard log for simplicity)
-	logger := &standardLogger{}
-
-	// Determine execution mode
-	var execMode taskmaster.ExecutionMode
-	switch *mode {
-	case "managed":
-		execMode = taskmaster.ManagedMode
-	case "rest":
-		execMode = taskmaster.RESTMode
-	case "machinery":
-		execMode = taskmaster.MachineryMode
-	default:
-		log.Fatalf("Unknown execution mode: %s", *mode)
-	}
-
-	// Create dispatcher with functional options
+// NewTaskmasterWorker creates a new taskmaster worker with the given configuration.
+func NewTaskmasterWorker(cfg *workerconfig.WorkerConfig, mode string) (*TaskmasterWorker, error) {
+	// Create dispatcher with mode-specific configuration
+	execMode := toTaskmasterMode(mode)
 	log.Printf("Initializing taskmaster dispatcher (mode=%s)...", execMode.String())
 
-	dispatcher := taskmaster.NewDispatcher(
-		taskmaster.WithMode(execMode),
-		taskmaster.WithWorkerCount(*workerCount),
-		taskmaster.WithTaskTimeout(*taskTimeout),
-		taskmaster.WithQueueSize(*queueSize),
-		taskmaster.WithLogger(logger),
-	)
-
-	// Configure mode-specific options
-	switch execMode {
-	case taskmaster.RESTMode:
-		dispatcher = taskmaster.NewDispatcher(
-			taskmaster.WithMode(execMode),
-			taskmaster.WithRESTConfig(&taskmaster.RESTConfig{
-				Addr:                *addr,
-				BasePath:            "/api/v1/tasks",
-				EnableSyncExecution: true,
-			}),
-			taskmaster.WithLogger(logger),
-		)
-	case taskmaster.MachineryMode:
-		dispatcher = taskmaster.NewDispatcher(
-			taskmaster.WithMode(execMode),
-			taskmaster.WithMachineryConfig(&taskmaster.MachineryConfig{
-				BrokerURL:         *brokerURL,
-				ResultBackend:     *brokerURL,
-				DefaultQueue:      "webmail_tasks",
-				DefaultRetryCount: 3,
-			}),
-			taskmaster.WithLogger(logger),
-		)
-	}
+	dispatcher := createDispatcher(execMode, cfg, mode)
 
 	// Register task implementations
-	// Note: In a real application, you would inject actual service implementations
+	// Note: In production, inject actual service instances instead of nil
 	dispatcher.Register(&workers.AIAnalysisTask{})
 	dispatcher.Register(&workers.SpamCheckTask{})
 	dispatcher.Register(&workers.SyncTask{})
 	dispatcher.Register(&workers.EnvelopeProcessorTask{})
-	dispatcher.Register(&workers.WebhookNotifierTask{})
+
+	// Register webhook notifier if configured
+	if cfg.Webhook.Enabled && cfg.Webhook.URL != "" {
+		webhookNotifier := &workers.WebhookNotifierTask{
+			WebhookURL: cfg.Webhook.URL,
+			SecretKey:  cfg.Webhook.SecretKey,
+		}
+		if err := dispatcher.Register(webhookNotifier); err != nil {
+			log.Printf("Warning: Failed to register webhook notifier: %v", err)
+		} else {
+			log.Println("Webhook notifier registered")
+		}
+	}
 
 	log.Printf("Registered tasks: %v", dispatcher.GetRegisteredTasks())
 
-	// Create context with cancellation
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	return &TaskmasterWorker{
+		Config:     cfg,
+		Dispatcher: dispatcher,
+		Mode:       mode,
+	}, nil
+}
 
-	// Start the dispatcher
-	if err := dispatcher.Start(ctx); err != nil {
-		log.Fatalf("Failed to start dispatcher: %v", err)
+// Start initializes and starts the taskmaster dispatcher.
+func (w *TaskmasterWorker) Start() error {
+	log.Printf("Starting taskmaster worker (ID: %s, Mode: %s)", w.Config.WorkerID, w.Mode)
+
+	ctx := context.Background()
+	if err := w.Dispatcher.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start dispatcher: %w", err)
 	}
 
-	log.Printf("Taskmaster dispatcher started successfully (mode=%s)", execMode.String())
+	log.Printf("Taskmaster dispatcher started successfully (mode=%s)", w.Mode)
+	return nil
+}
 
-	// Set up signal handling for graceful shutdown
+// Run blocks until a shutdown signal is received.
+func (w *TaskmasterWorker) Run() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	// Wait for shutdown signal
 	<-sigChan
+	return w.Stop()
+}
 
-	log.Println("Shutting down taskmaster dispatcher...")
+// Stop gracefully shuts down the taskmaster worker.
+func (w *TaskmasterWorker) Stop() error {
+	log.Println("Shutting down taskmaster worker...")
 
-	// Graceful shutdown with timeout
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer shutdownCancel()
+	ctx, cancel := context.WithTimeout(context.Background(), w.Config.ShutdownTimeout)
+	defer cancel()
 
-	if err := dispatcher.Stop(shutdownCtx); err != nil {
-		log.Printf("Error during shutdown: %v", err)
+	if err := w.Dispatcher.Stop(ctx); err != nil {
+		return fmt.Errorf("error during shutdown: %w", err)
 	}
 
-	log.Println("Taskmaster dispatcher stopped")
+	log.Println("Taskmaster worker stopped")
+	return nil
+}
+
+// createDispatcher creates a taskmaster dispatcher with mode-specific configuration.
+func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerConfig, _ string) taskmaster.FullDispatcher {
+	switch mode {
+	case taskmaster.RESTMode:
+		return taskmaster.NewDispatcher(
+			taskmaster.WithMode(mode),
+			taskmaster.WithRESTConfig(&taskmaster.RESTConfig{
+				Addr:                ":8080",
+				BasePath:            "/api/v1/tasks",
+				EnableSyncExecution: true,
+			}),
+			taskmaster.WithLogger(&standardLogger{}),
+		)
+	case taskmaster.MachineryMode:
+		return taskmaster.NewDispatcher(
+			taskmaster.WithMode(mode),
+			taskmaster.WithMachineryConfig(&taskmaster.MachineryConfig{
+				BrokerURL:         cfg.Queue.RedisURL,
+				ResultBackend:     cfg.Queue.RedisURL,
+				DefaultQueue:      "webmail_tasks",
+				DefaultRetryCount: 3,
+			}),
+			taskmaster.WithLogger(&standardLogger{}),
+		)
+	default: // ManagedMode
+		return taskmaster.NewDispatcher(
+			taskmaster.WithMode(mode),
+			taskmaster.WithWorkerCount(4),
+			taskmaster.WithTaskTimeout(30*time.Second),
+			taskmaster.WithQueueSize(100),
+			taskmaster.WithLogger(&standardLogger{}),
+		)
+	}
+}
+
+// toTaskmasterMode converts string mode to taskmaster.ExecutionMode.
+func toTaskmasterMode(mode string) taskmaster.ExecutionMode {
+	switch mode {
+	case "rest":
+		return taskmaster.RESTMode
+	case "machinery":
+		return taskmaster.MachineryMode
+	default:
+		return taskmaster.ManagedMode
+	}
+}
+
+// resolveOperationalMode implements precedence rules: CLI > Config > Default.
+func resolveOperationalMode(cliMode, configMode string) string {
+	validModes := map[string]bool{
+		"managed":   true,
+		"rest":      true,
+		"machinery": true,
+	}
+
+	// CLI argument takes precedence
+	if cliMode != "" && cliMode != "managed" {
+		if !validModes[cliMode] {
+			log.Fatalf("Invalid mode '%s'. Valid modes: managed, rest, machinery", cliMode)
+		}
+		return cliMode
+	}
+
+	// Config file value
+	if configMode != "" {
+		if !validModes[configMode] {
+			log.Fatalf("Invalid config mode '%s'. Valid modes: managed, rest, machinery", configMode)
+		}
+		return configMode
+	}
+
+	// Default
+	log.Println("No mode specified, defaulting to 'managed'")
+	return "managed"
 }
 
 // standardLogger adapts the standard log package to the taskmaster.Logger interface.
@@ -141,4 +195,49 @@ func (l *standardLogger) Debug(msg string, keysAndValues ...interface{}) {
 
 func (l *standardLogger) Warn(msg string, keysAndValues ...interface{}) {
 	log.Printf("[WARN] %s %v", msg, keysAndValues)
+}
+
+func main() {
+	// Parse command line flags
+	configPath := flag.String("config", "", "Path to configuration file")
+	mode := flag.String("mode", "managed", "Operational mode: managed, rest, machinery")
+	flag.Parse()
+
+	// Load or create configuration
+	var cfg *workerconfig.WorkerConfig
+	var err error
+
+	if *configPath != "" {
+		cfg, err = workerconfig.LoadWorkerConfig(*configPath)
+		if err != nil {
+			log.Fatalf("Failed to load config: %v", err)
+		}
+	} else {
+		cfg = workerconfig.DefaultWorkerConfig("taskmaster")
+		config.ExpandEnvVars(cfg)
+	}
+
+	// Resolve mode: CLI > Config > Default
+	operationalMode := resolveOperationalMode(*mode, cfg.OperationalMode)
+	cfg.OperationalMode = operationalMode
+
+	// Log startup info
+	log.Printf("=== Taskmaster Worker ===")
+	log.Printf("Worker ID:       %s", cfg.WorkerID)
+	log.Printf("Operational Mode: %s", operationalMode)
+	log.Printf("=========================")
+
+	// Create and run taskmaster worker
+	worker, err := NewTaskmasterWorker(cfg, operationalMode)
+	if err != nil {
+		log.Fatalf("Failed to create taskmaster worker: %v", err)
+	}
+
+	if err := worker.Start(); err != nil {
+		log.Fatalf("Failed to start taskmaster worker: %v", err)
+	}
+
+	if err := worker.Run(); err != nil {
+		log.Fatalf("Taskmaster worker error: %v", err)
+	}
 }

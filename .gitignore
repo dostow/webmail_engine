@@ -8,6 +8,7 @@ main
 webmail_engine
 sync_worker_taskmaster
 processor_worker_taskmaster
+cmd/taskmaster_worker/taskmaster_worker
 
 # Test binary
 *.test

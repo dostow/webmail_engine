@@ -506,6 +506,17 @@ func (d *RESTDispatcher) IsRunning() bool {
 	return d.running
 }
 
+// GetRegisteredTasks returns a list of all registered task IDs.
+func (d *RESTDispatcher) GetRegisteredTasks() []string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	ids := make([]string, 0, len(d.tasks))
+	for id := range d.tasks {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // dispatcherWrapper wraps RESTDispatcher to implement Dispatcher interface for scheduler.
 type dispatcherWrapper struct {
 	tasks  map[string]Task
@@ -567,6 +578,10 @@ func (w *dispatcherWrapper) IsRunning() bool {
 
 func (w *dispatcherWrapper) Mode() ExecutionMode {
 	return RESTMode
+}
+
+func (w *dispatcherWrapper) GetRegisteredTasks() []string {
+	return []string{} // Not used in REST mode
 }
 
 var _ Dispatcher = (*dispatcherWrapper)(nil)

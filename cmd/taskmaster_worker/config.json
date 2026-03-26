@@ -1,5 +1,5 @@
 {
-  "worker_type": "sync",
+  "worker_type": "taskmaster",
   "worker_id": "taskmaster-worker-1",
   "operational_mode": "managed",
   "shutdown_timeout": 30000000000,

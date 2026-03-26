@@ -368,6 +368,17 @@ func (d *MachineryDispatcher) IsRunning() bool {
 	return d.running
 }
 
+// GetRegisteredTasks returns a list of all registered task IDs.
+func (d *MachineryDispatcher) GetRegisteredTasks() []string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	ids := make([]string, 0, len(d.tasks))
+	for id := range d.tasks {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // Mode returns the execution mode (MachineryMode).
 func (d *MachineryDispatcher) Mode() ExecutionMode {
 	return MachineryMode

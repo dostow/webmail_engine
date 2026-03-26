@@ -63,6 +63,9 @@ type Dispatcher interface {
 
 	// Mode returns the current execution mode of the dispatcher.
 	Mode() ExecutionMode
+
+	// GetRegisteredTasks returns a list of all registered task IDs.
+	GetRegisteredTasks() []string
 }
 
 // TaskDispatch represents a single task dispatch request.

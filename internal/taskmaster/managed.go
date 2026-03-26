@@ -417,5 +417,16 @@ func (d *ManagedDispatcher) Register(task Task) error {
 	return nil
 }
 
+// GetRegisteredTasks returns a list of all registered task IDs.
+func (d *ManagedDispatcher) GetRegisteredTasks() []string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	ids := make([]string, 0, len(d.tasks))
+	for id := range d.tasks {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // ensure interface compliance for core Dispatcher methods
 var _ Dispatcher = (*ManagedDispatcher)(nil)

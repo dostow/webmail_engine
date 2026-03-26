@@ -45,13 +45,6 @@ func NewSyncWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig, mode string) (*
 		return nil, err
 	}
 
-	// Initialize envelope queue (simple memory queue for envelope storage)
-	queue, err := createQueue(cfg)
-	if err != nil {
-		accountStore.Close()
-		return nil, err
-	}
-
 	// Initialize IMAP session pool
 	sessionPool := pool.NewIMAPSessionPool(pool.DefaultSessionPoolConfig(), nil)
 
@@ -68,21 +61,23 @@ func NewSyncWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig, mode string) (*
 	)
 	if err != nil {
 		accountStore.Close()
-		queue.Close()
 		return nil, err
 	}
 
 	// Set account service in session pool
 	sessionPool.SetAccountService(accountService)
 
-	// Create sync service
-	syncService := service.NewSyncService(accountService, sessionPool, queue)
-
 	// Create dispatcher with mode
 	execMode := toTaskmasterMode(mode)
 	log.Printf("Initializing taskmaster dispatcher (mode=%s)...", execMode.String())
 
 	dispatcher := createDispatcher(execMode, cfg, mode)
+
+	// Create envelope queue that uses taskmaster dispatcher
+	queue := createQueue(dispatcher)
+
+	// Create sync service
+	syncService := service.NewSyncService(accountService, sessionPool, queue)
 
 	// Register the sync task with the sync service
 	syncTask := &workers.SyncTask{
@@ -287,19 +282,8 @@ func (w *SyncWorkerWithTaskmaster) Stop() error {
 	return nil
 }
 
-// Helper functions
-
-func createQueue(cfg *workerconfig.WorkerConfig) (envelopequeue.EnvelopeQueue, error) {
-	switch cfg.Queue.Type {
-	case "memory":
-		return envelopequeue.NewMemoryEnvelopeQueue(envelopequeue.DefaultMemoryEnvelopeQueueConfig()), nil
-	case "redis":
-		// Use memory queue - taskmaster handles task distribution
-		log.Println("Note: Using memory queue. Taskmaster handles task distribution.")
-		return envelopequeue.NewMemoryEnvelopeQueue(envelopequeue.DefaultMemoryEnvelopeQueueConfig()), nil
-	default:
-		return envelopequeue.NewMemoryEnvelopeQueue(envelopequeue.DefaultMemoryEnvelopeQueueConfig()), nil
-	}
+func createQueue(dispatcher taskmaster.TaskDispatcher) envelopequeue.EnvelopeQueue {
+	return envelopequeue.NewTaskmasterEnvelopeQueue(dispatcher, envelopequeue.DefaultTaskmasterQueueConfig())
 }
 
 func createStore(cfg *workerconfig.WorkerConfig) (store.AccountStore, error) {

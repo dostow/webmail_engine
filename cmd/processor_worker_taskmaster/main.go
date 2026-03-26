@@ -107,9 +107,9 @@ func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerCon
 	default:
 		return taskmaster.NewDispatcher(
 			taskmaster.WithMode(mode),
-			taskmaster.WithWorkerCount(cfg.ProcessorConfig.Concurrency),
+			taskmaster.WithWorkerCount(4),
 			taskmaster.WithTaskTimeout(2*time.Minute),
-			taskmaster.WithQueueSize(cfg.ProcessorConfig.BatchSize*2),
+			taskmaster.WithQueueSize(40),
 			taskmaster.WithLogger(&standardLogger{}),
 		)
 	}
@@ -127,8 +127,8 @@ func toTaskmasterMode(mode string) taskmaster.ExecutionMode {
 }
 
 func (w *ProcessorWorkerWithTaskmaster) Start() error {
-	log.Printf("Starting processor worker (ID: %s, Mode: %s, Concurrency: %d)",
-		w.Config.WorkerID, w.Mode, w.Config.ProcessorConfig.Concurrency)
+	log.Printf("Starting processor worker (ID: %s, Mode: %s)",
+		w.Config.WorkerID, w.Mode)
 
 	ctx := context.Background()
 	if err := w.Dispatcher.Start(ctx); err != nil {
@@ -236,7 +236,6 @@ func main() {
 	storeType := flag.String("store", "sql", "Store type: sql, memory")
 	storeDriver := flag.String("store-driver", "sqlite", "SQL driver: sqlite, postgres")
 	storeDSN := flag.String("store-dsn", "./data/webmail.db", "SQL DSN")
-	concurrency := flag.Int("concurrency", 4, "Number of processor workers")
 	flag.Parse()
 
 	var cfg *workerconfig.WorkerConfig
@@ -256,14 +255,6 @@ func main() {
 			Driver: *storeDriver,
 			DSN:    *storeDSN,
 		}
-		cfg.ProcessorConfig = &service.EnvelopeProcessorConfig{
-			Concurrency:     *concurrency,
-			BatchSize:       20,
-			PollInterval:    5 * time.Second,
-			CleanupInterval: 1 * time.Hour,
-			CleanupAge:      24 * time.Hour,
-			TempStoragePath: "data/attachments",
-		}
 		config.ExpandEnvVars(cfg)
 	}
 
@@ -272,7 +263,6 @@ func main() {
 	log.Printf("=== Processor Worker Taskmaster ===")
 	log.Printf("Worker ID:        %s", cfg.WorkerID)
 	log.Printf("Operational Mode: %s", operationalMode)
-	log.Printf("Concurrency:      %d", cfg.ProcessorConfig.Concurrency)
 	log.Printf("====================================")
 
 	processorWorker, err := NewProcessorWorkerWithTaskmaster(cfg, operationalMode)

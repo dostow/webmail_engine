@@ -4,10 +4,22 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"webmail_engine/internal/pool"
 )
+
+// ProcessorStats holds runtime statistics for envelope processing
+type ProcessorStats struct {
+	mu                sync.RWMutex
+	ProcessedCount    int64         `json:"processed_count"`
+	FailedCount       int64         `json:"failed_count"`
+	SkippedCount      int64         `json:"skipped_count"`
+	LastProcessedAt   time.Time     `json:"last_processed_at"`
+	AvgProcessingTime time.Duration `json:"avg_processing_time"`
+	CurrentQueueSize  int64         `json:"current_queue_size"`
+}
 
 // EnvelopeProcessorService handles envelope processing operations.
 type EnvelopeProcessorService struct {
@@ -95,15 +107,28 @@ func (s *EnvelopeProcessorService) ProcessEnvelope(ctx context.Context, envelope
 		envelope.ID, fetchedEnvelope.MessageID, fetchedEnvelope.Subject)
 
 	// Update stats
+	s.stats.mu.Lock()
 	s.stats.ProcessedCount++
 	s.stats.LastProcessedAt = time.Now()
 	processingTime := time.Since(startTime)
 	s.stats.AvgProcessingTime = processingTime
+	s.stats.mu.Unlock()
 
 	return nil
 }
 
 // GetProcessorStats returns processor statistics.
 func (s *EnvelopeProcessorService) GetProcessorStats(ctx context.Context) (*ProcessorStats, error) {
-	return s.stats, nil
+	s.stats.mu.RLock()
+	defer s.stats.mu.RUnlock()
+
+	// Return a copy to avoid race conditions
+	return &ProcessorStats{
+		ProcessedCount:    s.stats.ProcessedCount,
+		FailedCount:       s.stats.FailedCount,
+		SkippedCount:      s.stats.SkippedCount,
+		LastProcessedAt:   s.stats.LastProcessedAt,
+		AvgProcessingTime: s.stats.AvgProcessingTime,
+		CurrentQueueSize:  s.stats.CurrentQueueSize,
+	}, nil
 }

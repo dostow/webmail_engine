@@ -451,5 +451,21 @@ func (d *DispatcherImpl) dispatchMachinery(ctx context.Context, taskID string, p
 	return d.machineryDispatcher.Dispatch(ctx, taskID, payload)
 }
 
+// TaskDispatcher is a subset interface of Dispatcher for dispatching tasks.
+// This interface is used by components that only need to dispatch tasks
+// without managing the full dispatcher lifecycle.
+type TaskDispatcher interface {
+	// Dispatch sends a task for execution with the given payload.
+	// The taskID must match a registered task implementation.
+	Dispatch(ctx context.Context, taskID string, payload []byte) error
+
+	// CreateTask creates a new task for immediate or scheduled execution.
+	CreateTask(ctx context.Context, taskID string, payload []byte, opts *CreateTaskOptions) (string, error)
+
+	// ScheduleTask creates a recurring task that runs at the specified interval.
+	ScheduleTask(ctx context.Context, taskID string, payload []byte, interval time.Duration, opts *ScheduleTaskOptions) (string, error)
+}
+
 // ensure interface compliance
 var _ Dispatcher = (*DispatcherImpl)(nil)
+var _ TaskDispatcher = (*DispatcherImpl)(nil)

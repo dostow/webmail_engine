@@ -8,21 +8,19 @@ import (
 
 	"webmail_engine/internal/config"
 	"webmail_engine/internal/envelopequeue"
-	"webmail_engine/internal/service"
 )
 
 // WorkerConfig holds configuration for standalone workers (sync/processor)
 type WorkerConfig struct {
-	WorkerType      string                           `json:"worker_type"`                // "sync", "processor", "memory-worker"
-	WorkerID        string                           `json:"worker_id"`                  // Unique worker identifier
-	OperationalMode string                           `json:"operational_mode,omitempty"` // "scheduled_managed", "rest", "machinery"
-	Queue           QueueConfig                      `json:"queue"`
-	Store           config.StoreConfig               `json:"store"`
-	Logging         config.LoggingConfig             `json:"logging"`
-	ShutdownTimeout time.Duration                    `json:"shutdown_timeout"`
-	Security        config.SecurityConfig            `json:"security"`
-	IMAP            config.IMAPConfig                `json:"imap"`
-	ProcessorConfig *service.EnvelopeProcessorConfig `json:"processor_config,omitempty"`
+	WorkerType      string                `json:"worker_type"`                // "sync", "processor", "memory-worker"
+	WorkerID        string                `json:"worker_id"`                  // Unique worker identifier
+	OperationalMode string                `json:"operational_mode,omitempty"` // "scheduled_managed", "rest", "machinery"
+	Queue           QueueConfig           `json:"queue"`
+	Store           config.StoreConfig    `json:"store"`
+	Logging         config.LoggingConfig  `json:"logging"`
+	ShutdownTimeout time.Duration         `json:"shutdown_timeout"`
+	Security        config.SecurityConfig `json:"security"`
+	IMAP            config.IMAPConfig     `json:"imap"`
 }
 
 // QueueConfig holds message queue configuration
@@ -92,8 +90,6 @@ func (w *WorkerConfig) ToEnvelopeQueueConfig() *envelopequeue.MachineryQueueConf
 		HighPriorityQueue:   w.Queue.HighPriority,
 		NormalPriorityQueue: w.Queue.NormalPriority,
 		LowPriorityQueue:    w.Queue.LowPriority,
-		EnqueueTimeout:      30 * time.Second,
-		CleanupInterval:     24 * time.Hour,
 	}
 }
 

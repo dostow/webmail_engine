@@ -6,6 +6,8 @@
 *.dylib
 main
 webmail_engine
+sync_worker_taskmaster
+processor_worker_taskmaster
 
 # Test binary
 *.test

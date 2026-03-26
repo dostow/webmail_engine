@@ -48,3 +48,4 @@ tmp/
 config.json.*
 *.rdb
 config.json
+__debug*

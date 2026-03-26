@@ -82,12 +82,15 @@ func NewProcessorWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig, mode strin
 }
 
 func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerConfig, _ string) taskmaster.FullDispatcher {
+	// Get dispatch-specific configuration
+	addr, redisURL, queueName := cfg.GetDispatchConfig()
+
 	switch mode {
 	case taskmaster.RESTMode:
 		return taskmaster.NewDispatcher(
 			taskmaster.WithMode(mode),
 			taskmaster.WithRESTConfig(&taskmaster.RESTConfig{
-				Addr:                ":8081",
+				Addr:                addr,
 				BasePath:            "/api/v1/tasks",
 				EnableSyncExecution: true,
 			}),
@@ -97,19 +100,31 @@ func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerCon
 		return taskmaster.NewDispatcher(
 			taskmaster.WithMode(mode),
 			taskmaster.WithMachineryConfig(&taskmaster.MachineryConfig{
-				BrokerURL:         cfg.Queue.RedisURL,
-				ResultBackend:     cfg.Queue.RedisURL,
-				DefaultQueue:      "webmail_processor_tasks",
+				BrokerURL:         redisURL,
+				ResultBackend:     cfg.Execution.ResultBackend,
+				DefaultQueue:      queueName,
 				DefaultRetryCount: 3,
 			}),
 			taskmaster.WithLogger(&standardLogger{}),
 		)
 	default:
+		workerCount := cfg.Execution.WorkerCount
+		if workerCount <= 0 {
+			workerCount = 4
+		}
+		taskTimeout := cfg.Execution.TaskTimeout
+		if taskTimeout <= 0 {
+			taskTimeout = 2 * time.Minute
+		}
+		queueSize := cfg.Execution.QueueSize
+		if queueSize <= 0 {
+			queueSize = 40
+		}
 		return taskmaster.NewDispatcher(
 			taskmaster.WithMode(mode),
-			taskmaster.WithWorkerCount(4),
-			taskmaster.WithTaskTimeout(2*time.Minute),
-			taskmaster.WithQueueSize(40),
+			taskmaster.WithWorkerCount(workerCount),
+			taskmaster.WithTaskTimeout(taskTimeout),
+			taskmaster.WithQueueSize(queueSize),
 			taskmaster.WithLogger(&standardLogger{}),
 		)
 	}
@@ -258,11 +273,12 @@ func main() {
 		config.ExpandEnvVars(cfg)
 	}
 
-	operationalMode := resolveOperationalMode(*mode, cfg.OperationalMode)
+	operationalMode := resolveOperationalMode(*mode, cfg.GetExecutionMode())
 
 	log.Printf("=== Processor Worker Taskmaster ===")
-	log.Printf("Worker ID:        %s", cfg.WorkerID)
-	log.Printf("Operational Mode: %s", operationalMode)
+	log.Printf("Worker ID:  %s", cfg.WorkerID)
+	log.Printf("Dispatch:   %s", cfg.Dispatch.Type)
+	log.Printf("Execution:  %s (%s mode)", cfg.Execution.Mode, operationalMode)
 	log.Printf("====================================")
 
 	processorWorker, err := NewProcessorWorkerWithTaskmaster(cfg, operationalMode)
@@ -281,24 +297,37 @@ func main() {
 
 func resolveOperationalMode(cliMode, configMode string) string {
 	validModes := map[string]bool{
-		"managed":   true,
-		"rest":      true,
-		"machinery": true,
+		"managed":           true,
+		"scheduled_managed": true, // Legacy alias
+		"rest":              true,
+		"machinery":         true,
 	}
 
-	if cliMode != "" && cliMode != "managed" {
+	// CLI argument takes precedence
+	if cliMode != "" {
 		if !validModes[cliMode] {
 			log.Fatalf("Invalid mode '%s'. Valid modes: managed, rest, machinery", cliMode)
+		}
+		// Normalize legacy mode name
+		if cliMode == "scheduled_managed" {
+			return "managed"
 		}
 		return cliMode
 	}
 
+	// Config file value
 	if configMode != "" {
 		if !validModes[configMode] {
 			log.Fatalf("Invalid config mode '%s'. Valid modes: managed, rest, machinery", configMode)
 		}
+		// Normalize legacy mode name
+		if configMode == "scheduled_managed" {
+			return "managed"
+		}
 		return configMode
 	}
 
+	// Default
+	log.Println("No mode specified, defaulting to 'managed'")
 	return "managed"
 }

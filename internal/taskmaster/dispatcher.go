@@ -288,6 +288,27 @@ func (d *DispatcherImpl) Dispatch(ctx context.Context, taskID string, payload []
 	}
 }
 
+// DispatchMultiple sends tasks to multiple task handlers in sequence.
+// Each task is dispatched with its own payload.
+// Returns an error if any dispatch fails (previous dispatches are not rolled back).
+func (d *DispatcherImpl) DispatchMultiple(ctx context.Context, tasks []TaskDispatch) error {
+	if len(tasks) == 0 {
+		return nil
+	}
+
+	var errs []error
+	for _, task := range tasks {
+		if err := d.Dispatch(ctx, task.TaskID, task.Payload); err != nil {
+			errs = append(errs, fmt.Errorf("task %s: %w", task.TaskID, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("dispatch multiple failed: %v", errs)
+	}
+	return nil
+}
+
 // IsRunning returns true if the dispatcher is currently running.
 func (d *DispatcherImpl) IsRunning() bool {
 	d.mu.RLock()
@@ -458,6 +479,11 @@ type TaskDispatcher interface {
 	// Dispatch sends a task for execution with the given payload.
 	// The taskID must match a registered task implementation.
 	Dispatch(ctx context.Context, taskID string, payload []byte) error
+
+	// DispatchMultiple sends tasks to multiple task handlers in sequence.
+	// Each task is dispatched with its own payload.
+	// Returns an error if any dispatch fails (previous dispatches are not rolled back).
+	DispatchMultiple(ctx context.Context, tasks []TaskDispatch) error
 
 	// CreateTask creates a new task for immediate or scheduled execution.
 	CreateTask(ctx context.Context, taskID string, payload []byte, opts *CreateTaskOptions) (string, error)

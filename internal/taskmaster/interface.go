@@ -53,11 +53,22 @@ type Dispatcher interface {
 	// Returns ErrDispatcherNotStarted if Start has not been called.
 	Dispatch(ctx context.Context, taskID string, payload []byte) error
 
+	// DispatchMultiple sends tasks to multiple task handlers in sequence.
+	// Each task is dispatched with its own payload.
+	// Returns an error if any dispatch fails (previous dispatches are not rolled back).
+	DispatchMultiple(ctx context.Context, tasks []TaskDispatch) error
+
 	// IsRunning returns true if the dispatcher is currently running.
 	IsRunning() bool
 
 	// Mode returns the current execution mode of the dispatcher.
 	Mode() ExecutionMode
+}
+
+// TaskDispatch represents a single task dispatch request.
+type TaskDispatch struct {
+	TaskID  string `json:"task_id"`
+	Payload []byte `json:"payload"`
 }
 
 // TaskCreator defines the contract for creating and scheduling tasks.

@@ -170,6 +170,25 @@ func (d *ManagedDispatcher) Dispatch(ctx context.Context, taskID string, payload
 	}
 }
 
+// DispatchMultiple sends multiple tasks to the worker pool in sequence.
+func (d *ManagedDispatcher) DispatchMultiple(ctx context.Context, tasks []TaskDispatch) error {
+	if len(tasks) == 0 {
+		return nil
+	}
+
+	var errs []error
+	for _, task := range tasks {
+		if err := d.Dispatch(ctx, task.TaskID, task.Payload); err != nil {
+			errs = append(errs, fmt.Errorf("task %s: %w", task.TaskID, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("dispatch multiple failed: %v", errs)
+	}
+	return nil
+}
+
 // DispatchSync sends a task and waits for completion (synchronous execution).
 // This is useful for testing or when immediate results are needed.
 func (d *ManagedDispatcher) DispatchSync(ctx context.Context, taskID string, payload []byte) error {

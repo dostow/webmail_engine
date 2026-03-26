@@ -245,6 +245,25 @@ func (d *MachineryDispatcher) Dispatch(ctx context.Context, taskID string, paylo
 	return nil
 }
 
+// DispatchMultiple sends multiple tasks for execution via Machinery.
+func (d *MachineryDispatcher) DispatchMultiple(ctx context.Context, tasks []TaskDispatch) error {
+	if len(tasks) == 0 {
+		return nil
+	}
+
+	var errs []error
+	for _, task := range tasks {
+		if err := d.Dispatch(ctx, task.TaskID, task.Payload); err != nil {
+			errs = append(errs, fmt.Errorf("task %s: %w", task.TaskID, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("dispatch multiple failed: %v", errs)
+	}
+	return nil
+}
+
 // DispatchSync sends a task and waits for completion (synchronous).
 func (d *MachineryDispatcher) DispatchSync(ctx context.Context, taskID string, payload []byte) error {
 	d.mu.RLock()

@@ -241,6 +241,25 @@ func (d *RESTDispatcher) Dispatch(ctx context.Context, taskID string, payload []
 	return task.Execute(ctx, payload)
 }
 
+// DispatchMultiple sends multiple tasks for execution via the REST API.
+func (d *RESTDispatcher) DispatchMultiple(ctx context.Context, tasks []TaskDispatch) error {
+	if len(tasks) == 0 {
+		return nil
+	}
+
+	var errs []error
+	for _, task := range tasks {
+		if err := d.Dispatch(ctx, task.TaskID, task.Payload); err != nil {
+			errs = append(errs, fmt.Errorf("task %s: %w", task.TaskID, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("dispatch multiple failed: %v", errs)
+	}
+	return nil
+}
+
 // registerRoutes sets up Gin route handlers.
 func (d *RESTDispatcher) registerRoutes(engine *gin.Engine) {
 	// API v1 task routes
@@ -520,6 +539,25 @@ func (w *dispatcherWrapper) Dispatch(ctx context.Context, taskID string, payload
 		}
 	}()
 
+	return nil
+}
+
+func (w *dispatcherWrapper) DispatchMultiple(ctx context.Context, tasks []TaskDispatch) error {
+	// Execute all tasks asynchronously
+	for _, task := range tasks {
+		go func(taskID string, payload []byte) {
+			t, exists := w.tasks[taskID]
+			if !exists {
+				w.logger.Error("Task not found", "task_id", taskID)
+				return
+			}
+			if err := t.Execute(ctx, payload); err != nil {
+				w.logger.Error("Scheduled task execution failed",
+					"task_id", taskID,
+					"error", err)
+			}
+		}(task.TaskID, task.Payload)
+	}
 	return nil
 }
 

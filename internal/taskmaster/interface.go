@@ -268,6 +268,10 @@ type DispatcherConfig struct {
 
 	// MachineryConfig holds configuration for MachineryMode.
 	MachineryConfig *MachineryConfig
+
+	// DispatchOnly indicates that this dispatcher only dispatches tasks
+	// without consuming them locally (no worker started). Used for push-only scenarios.
+	DispatchOnly bool
 }
 
 // RESTConfig holds configuration for REST mode.

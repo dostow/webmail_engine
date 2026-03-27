@@ -11,13 +11,14 @@ import (
 )
 
 // WorkerConfig holds configuration for standalone workers (sync/processor)
-// Supports separate dispatch (intake) and execution (processing) configuration.
+// Supports separate dispatch (intake), execution (processing), and sub-task dispatch configuration.
 type WorkerConfig struct {
-	WorkerType      string                `json:"worker_type"` // "sync", "processor", "taskmaster"
-	WorkerID        string                `json:"worker_id"`   // Unique worker identifier
-	Dispatch        DispatchConfig        `json:"dispatch"`    // How tasks are received
-	Execution       ExecutionConfig       `json:"execution"`   // How tasks are processed
-	Queue           QueueConfig           `json:"queue"`       // Legacy: for backward compatibility
+	WorkerType      string                `json:"worker_type"`       // "sync", "processor", "taskmaster"
+	WorkerID        string                `json:"worker_id"`         // Unique worker identifier
+	Dispatch        DispatchConfig        `json:"dispatch"`          // How tasks are received
+	Execution       ExecutionConfig       `json:"execution"`         // How tasks are processed
+	SubTaskDispatch SubTaskDispatchConfig `json:"sub_task_dispatch"` // How sub-tasks (envelope processing) are dispatched
+	Queue           QueueConfig           `json:"queue"`             // Legacy: for backward compatibility
 	Store           config.StoreConfig    `json:"store"`
 	Logging         config.LoggingConfig  `json:"logging"`
 	ShutdownTimeout time.Duration         `json:"shutdown_timeout"`
@@ -45,6 +46,18 @@ type ExecutionConfig struct {
 	QueueSize     int           `json:"queue_size"`               // Queue buffer size
 	RedisURL      string        `json:"redis_url,omitempty"`      // For machinery execution
 	ResultBackend string        `json:"result_backend,omitempty"` // Machinery result backend
+}
+
+// SubTaskDispatchConfig configures how sub-tasks (e.g., envelope processing) are dispatched.
+// This is separate from main task dispatch to allow different scaling for envelope processing.
+// Supports: managed (direct call), machinery (Redis/RabbitMQ queue)
+type SubTaskDispatchConfig struct {
+	Type           string `json:"type"`            // "managed" (direct), "machinery" (queue)
+	RedisURL       string `json:"redis_url"`       // Redis URL for machinery mode
+	QueueName      string `json:"queue_name"`      // Queue name for machinery mode
+	HighPriority   string `json:"high_priority"`   // High priority queue name
+	NormalPriority string `json:"normal_priority"` // Normal priority queue name
+	LowPriority    string `json:"low_priority"`    // Low priority queue name
 }
 
 // SchedulerConfig configures task scheduling behavior.
@@ -84,6 +97,14 @@ func DefaultWorkerConfig(workerType string) *WorkerConfig {
 			WorkerCount: 4,
 			TaskTimeout: 30 * time.Second,
 			QueueSize:   100,
+		},
+		SubTaskDispatch: SubTaskDispatchConfig{
+			Type:           "managed", // Default: direct dispatch (same process)
+			RedisURL:       "redis://localhost:6379",
+			QueueName:      "envelope_tasks",
+			HighPriority:   "envelope_high",
+			NormalPriority: "envelope_normal",
+			LowPriority:    "envelope_low",
 		},
 		Scheduler: SchedulerConfig{
 			Enabled:          true,
@@ -229,4 +250,29 @@ func (w *WorkerConfig) GetDispatchConfig() (addr string, redisURL string, queueN
 		}
 	}
 	return addr, redisURL, queueName
+}
+
+// GetSubTaskDispatchConfig returns sub-task dispatch configuration.
+func (w *WorkerConfig) GetSubTaskDispatchConfig() (redisURL string, queueName string, highPriority string, normalPriority string, lowPriority string) {
+	redisURL = w.SubTaskDispatch.RedisURL
+	if redisURL == "" {
+		redisURL = w.Queue.RedisURL
+	}
+	queueName = w.SubTaskDispatch.QueueName
+	if queueName == "" {
+		queueName = "envelope_tasks"
+	}
+	highPriority = w.SubTaskDispatch.HighPriority
+	if highPriority == "" {
+		highPriority = w.Queue.HighPriority
+	}
+	normalPriority = w.SubTaskDispatch.NormalPriority
+	if normalPriority == "" {
+		normalPriority = w.Queue.NormalPriority
+	}
+	lowPriority = w.SubTaskDispatch.LowPriority
+	if lowPriority == "" {
+		lowPriority = w.Queue.LowPriority
+	}
+	return redisURL, queueName, highPriority, normalPriority, lowPriority
 }

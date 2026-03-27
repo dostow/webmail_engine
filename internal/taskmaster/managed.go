@@ -21,6 +21,7 @@ type ManagedDispatcher struct {
 	running     atomic.Bool
 	stopChan    chan struct{}
 	stats       *ManagedStats
+	inFlight    atomic.Int64 // Track number of tasks currently executing
 }
 
 // ManagedStats holds statistics for the managed worker pool.
@@ -99,7 +100,11 @@ func (d *ManagedDispatcher) Stop(ctx context.Context) error {
 		return nil
 	}
 
-	d.logger.Info("Stopping managed worker pool...")
+	inFlightCount := d.inFlight.Load()
+	queueDepth := len(d.taskChan)
+	d.logger.Info("Stopping managed worker pool...",
+		"in_flight_tasks", inFlightCount,
+		"queued_tasks", queueDepth)
 
 	// Signal workers to stop
 	close(d.stopChan)
@@ -113,11 +118,16 @@ func (d *ManagedDispatcher) Stop(ctx context.Context) error {
 
 	select {
 	case <-done:
-		d.logger.Info("Managed worker pool stopped gracefully")
+		d.logger.Info("Managed worker pool stopped gracefully",
+			"final_in_flight", d.inFlight.Load())
 		d.running.Store(false)
 		return nil
 	case <-ctx.Done():
-		d.logger.Error("Managed worker pool shutdown timed out", "error", ctx.Err())
+		remainingInFlight := d.inFlight.Load()
+		d.logger.Error("Managed worker pool shutdown timed out",
+			"error", ctx.Err(),
+			"remaining_in_flight", remainingInFlight,
+			"remaining_queue_depth", len(d.taskChan))
 		d.running.Store(false)
 		return fmt.Errorf("%w: %v", ErrGracefulShutdownTimeout, ctx.Err())
 	}
@@ -265,6 +275,10 @@ func (d *ManagedDispatcher) processTask(workerID int, request *TaskRequest) {
 	startTime := time.Now()
 	taskID := request.TaskID
 
+	// Track in-flight task
+	d.inFlight.Add(1)
+	defer d.inFlight.Add(-1)
+
 	d.logger.Debug("Processing task", "worker_id", workerID, "task_id", taskID)
 
 	// Get task implementation
@@ -295,13 +309,21 @@ func (d *ManagedDispatcher) processTask(workerID int, request *TaskRequest) {
 	// Update stats
 	d.updateStats(err == nil, startTime)
 
-	// Log result
+	// Log result with shutdown awareness
 	if err != nil {
-		d.logger.Error("Task execution failed",
-			"worker_id", workerID,
-			"task_id", taskID,
-			"error", err,
-			"duration_ms", time.Since(startTime).Milliseconds())
+		if request.Ctx.Err() != nil {
+			d.logger.Info("Task interrupted by shutdown or timeout",
+				"worker_id", workerID,
+				"task_id", taskID,
+				"error", err,
+				"duration_ms", time.Since(startTime).Milliseconds())
+		} else {
+			d.logger.Error("Task execution failed",
+				"worker_id", workerID,
+				"task_id", taskID,
+				"error", err,
+				"duration_ms", time.Since(startTime).Milliseconds())
+		}
 	} else {
 		d.logger.Debug("Task completed",
 			"worker_id", workerID,

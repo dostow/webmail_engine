@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"webmail_engine/internal/config"
+	"webmail_engine/internal/logger"
 	"webmail_engine/internal/pool"
 	"webmail_engine/internal/service"
 	"webmail_engine/internal/store"
@@ -57,10 +58,9 @@ func NewProcessorWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig, mode strin
 	sessionPool.SetAccountService(accountService)
 	processorService := service.NewEnvelopeProcessorService(accountService, sessionPool)
 
-	execMode := toTaskmasterMode(mode)
-	log.Printf("Initializing taskmaster dispatcher (mode=%s)...", execMode.String())
+	log.Printf("Initializing taskmaster dispatcher (dispatch=%s, execution=%s)...", cfg.Dispatch.Type, cfg.Execution.Mode)
 
-	dispatcher := createDispatcher(execMode, cfg, mode)
+	dispatcher := createDispatcher(cfg)
 
 	processorTask := &workers.EnvelopeProcessorTask{
 		ProcessorService: processorService,
@@ -81,33 +81,36 @@ func NewProcessorWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig, mode strin
 	}, nil
 }
 
-func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerConfig, _ string) taskmaster.FullDispatcher {
+// createDispatcher creates a taskmaster dispatcher with mode-specific configuration.
+// Dispatch mode is determined by cfg.Dispatch.Type (managed, rest, machinery).
+// Execution config controls worker pool settings for managed mode.
+func createDispatcher(cfg *workerconfig.WorkerConfig) taskmaster.FullDispatcher {
 	// Get dispatch-specific configuration
 	addr, redisURL, queueName := cfg.GetDispatchConfig()
 
-	switch mode {
-	case taskmaster.RESTMode:
+	switch cfg.Dispatch.Type {
+	case "rest":
 		return taskmaster.NewDispatcher(
-			taskmaster.WithMode(mode),
+			taskmaster.WithMode(taskmaster.RESTMode),
 			taskmaster.WithRESTConfig(&taskmaster.RESTConfig{
 				Addr:                addr,
 				BasePath:            "/api/v1/tasks",
 				EnableSyncExecution: true,
 			}),
-			taskmaster.WithLogger(&standardLogger{}),
+			taskmaster.WithLogger(logger.NewStandardLogger()),
 		)
-	case taskmaster.MachineryMode:
+	case "machinery":
 		return taskmaster.NewDispatcher(
-			taskmaster.WithMode(mode),
+			taskmaster.WithMode(taskmaster.MachineryMode),
 			taskmaster.WithMachineryConfig(&taskmaster.MachineryConfig{
 				BrokerURL:         redisURL,
 				ResultBackend:     cfg.Execution.ResultBackend,
 				DefaultQueue:      queueName,
 				DefaultRetryCount: 3,
 			}),
-			taskmaster.WithLogger(&standardLogger{}),
+			taskmaster.WithLogger(logger.NewStandardLogger()),
 		)
-	default:
+	default: // managed
 		workerCount := cfg.Execution.WorkerCount
 		if workerCount <= 0 {
 			workerCount = 4
@@ -121,11 +124,11 @@ func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerCon
 			queueSize = 40
 		}
 		return taskmaster.NewDispatcher(
-			taskmaster.WithMode(mode),
+			taskmaster.WithMode(taskmaster.ManagedMode),
 			taskmaster.WithWorkerCount(workerCount),
 			taskmaster.WithTaskTimeout(taskTimeout),
 			taskmaster.WithQueueSize(queueSize),
-			taskmaster.WithLogger(&standardLogger{}),
+			taskmaster.WithLogger(logger.NewStandardLogger()),
 		)
 	}
 }
@@ -223,24 +226,6 @@ func createStore(cfg *workerconfig.WorkerConfig) (store.AccountStore, error) {
 	}
 
 	return accountStore, err
-}
-
-type standardLogger struct{}
-
-func (l *standardLogger) Info(msg string, keysAndValues ...interface{}) {
-	log.Printf("[INFO] %s %v", msg, keysAndValues)
-}
-
-func (l *standardLogger) Error(msg string, keysAndValues ...interface{}) {
-	log.Printf("[ERROR] %s %v", msg, keysAndValues)
-}
-
-func (l *standardLogger) Debug(msg string, keysAndValues ...interface{}) {
-	log.Printf("[DEBUG] %s %v", msg, keysAndValues)
-}
-
-func (l *standardLogger) Warn(msg string, keysAndValues ...interface{}) {
-	log.Printf("[WARN] %s %v", msg, keysAndValues)
 }
 
 func main() {

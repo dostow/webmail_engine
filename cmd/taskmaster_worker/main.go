@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"webmail_engine/internal/config"
+	"webmail_engine/internal/logger"
 	"webmail_engine/internal/taskmaster"
 	"webmail_engine/internal/workerconfig"
 	"webmail_engine/internal/workers"
@@ -31,11 +32,10 @@ type TaskmasterWorker struct {
 
 // NewTaskmasterWorker creates a new taskmaster worker with the given configuration.
 func NewTaskmasterWorker(cfg *workerconfig.WorkerConfig, mode string) (*TaskmasterWorker, error) {
-	// Create dispatcher with mode-specific configuration
-	execMode := toTaskmasterMode(mode)
-	log.Printf("Initializing taskmaster dispatcher (mode=%s)...", execMode.String())
+	// Create dispatcher with mode
+	log.Printf("Initializing taskmaster dispatcher (dispatch=%s, execution=%s)...", cfg.Dispatch.Type, cfg.Execution.Mode)
 
-	dispatcher := createDispatcher(execMode, cfg, mode)
+	dispatcher := createDispatcher(cfg)
 
 	// Register task implementations
 	// Note: In production, inject actual service instances instead of nil
@@ -103,34 +103,35 @@ func (w *TaskmasterWorker) Stop() error {
 }
 
 // createDispatcher creates a taskmaster dispatcher with mode-specific configuration.
-// Uses the new separated Dispatch and Execution config structure.
-func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerConfig, _ string) taskmaster.FullDispatcher {
+// Dispatch mode is determined by cfg.Dispatch.Type (managed, rest, machinery).
+// Execution config controls worker pool settings for managed mode.
+func createDispatcher(cfg *workerconfig.WorkerConfig) taskmaster.FullDispatcher {
 	// Get dispatch-specific configuration
 	addr, redisURL, queueName := cfg.GetDispatchConfig()
 
-	switch mode {
-	case taskmaster.RESTMode:
+	switch cfg.Dispatch.Type {
+	case "rest":
 		return taskmaster.NewDispatcher(
-			taskmaster.WithMode(mode),
+			taskmaster.WithMode(taskmaster.RESTMode),
 			taskmaster.WithRESTConfig(&taskmaster.RESTConfig{
 				Addr:                addr,
 				BasePath:            "/api/v1/tasks",
 				EnableSyncExecution: true,
 			}),
-			taskmaster.WithLogger(&standardLogger{}),
+			taskmaster.WithLogger(logger.NewStandardLogger()),
 		)
-	case taskmaster.MachineryMode:
+	case "machinery":
 		return taskmaster.NewDispatcher(
-			taskmaster.WithMode(mode),
+			taskmaster.WithMode(taskmaster.MachineryMode),
 			taskmaster.WithMachineryConfig(&taskmaster.MachineryConfig{
 				BrokerURL:         redisURL,
 				ResultBackend:     cfg.Execution.ResultBackend,
 				DefaultQueue:      queueName,
 				DefaultRetryCount: 3,
 			}),
-			taskmaster.WithLogger(&standardLogger{}),
+			taskmaster.WithLogger(logger.NewStandardLogger()),
 		)
-	default: // ManagedMode
+	default: // managed
 		workerCount := cfg.Execution.WorkerCount
 		if workerCount <= 0 {
 			workerCount = 4
@@ -144,24 +145,12 @@ func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerCon
 			queueSize = 100
 		}
 		return taskmaster.NewDispatcher(
-			taskmaster.WithMode(mode),
+			taskmaster.WithMode(taskmaster.ManagedMode),
 			taskmaster.WithWorkerCount(workerCount),
 			taskmaster.WithTaskTimeout(taskTimeout),
 			taskmaster.WithQueueSize(queueSize),
-			taskmaster.WithLogger(&standardLogger{}),
+			taskmaster.WithLogger(logger.NewStandardLogger()),
 		)
-	}
-}
-
-// toTaskmasterMode converts string mode to taskmaster.ExecutionMode.
-func toTaskmasterMode(mode string) taskmaster.ExecutionMode {
-	switch mode {
-	case "rest":
-		return taskmaster.RESTMode
-	case "machinery":
-		return taskmaster.MachineryMode
-	default:
-		return taskmaster.ManagedMode
 	}
 }
 
@@ -202,25 +191,6 @@ func resolveOperationalMode(cliMode, configMode string) string {
 	// Default
 	log.Println("No mode specified, defaulting to 'managed'")
 	return "managed"
-}
-
-// standardLogger adapts the standard log package to the taskmaster.Logger interface.
-type standardLogger struct{}
-
-func (l *standardLogger) Info(msg string, keysAndValues ...interface{}) {
-	log.Printf("[INFO] %s %v", msg, keysAndValues)
-}
-
-func (l *standardLogger) Error(msg string, keysAndValues ...interface{}) {
-	log.Printf("[ERROR] %s %v", msg, keysAndValues)
-}
-
-func (l *standardLogger) Debug(msg string, keysAndValues ...interface{}) {
-	log.Printf("[DEBUG] %s %v", msg, keysAndValues)
-}
-
-func (l *standardLogger) Warn(msg string, keysAndValues ...interface{}) {
-	log.Printf("[WARN] %s %v", msg, keysAndValues)
 }
 
 func main() {

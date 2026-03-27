@@ -12,6 +12,7 @@ import (
 
 	"webmail_engine/internal/config"
 	"webmail_engine/internal/envelopequeue"
+	"webmail_engine/internal/logger"
 	"webmail_engine/internal/pool"
 	"webmail_engine/internal/service"
 	"webmail_engine/internal/store"
@@ -67,17 +68,43 @@ func NewSyncWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig, mode string) (*
 	// Set account service in session pool
 	sessionPool.SetAccountService(accountService)
 
-	// Create dispatcher with mode
-	execMode := toTaskmasterMode(mode)
-	log.Printf("Initializing taskmaster dispatcher (mode=%s)...", execMode.String())
-
-	dispatcher := createDispatcher(execMode, cfg, mode)
+	// Create main dispatcher for sync task intake/execution
+	log.Printf("Initializing taskmaster dispatcher (dispatch=%s, execution=%s)...", cfg.Dispatch.Type, cfg.Execution.Mode)
+	dispatcher := createDispatcher(cfg)
 
 	// Check if webhook is configured for queue pipeline
 	webhookConfigured := cfg.Webhook.URL != ""
 
-	// Create envelope queue that uses taskmaster dispatcher
-	queue := createQueue(dispatcher, webhookConfigured)
+	// Create sub-task dispatcher for envelope processing
+	// Reuse main dispatcher if sub-task config matches dispatch config
+	var subTaskDispatcher taskmaster.TaskDispatcher
+	if shouldReuseDispatcher(cfg) {
+		log.Println("Sub-task dispatch: reusing main dispatcher (same config)")
+		subTaskDispatcher = dispatcher
+
+		// When reusing main dispatcher with machinery, register sub-task handlers for dispatch
+		if cfg.Dispatch.Type == "machinery" {
+			if err := dispatcher.Register(&workers.EnvelopeProcessorTask{}); err != nil {
+				log.Printf("Warning: Failed to register envelope_processor: %v", err)
+			}
+			if webhookConfigured {
+				webhookNotifier := &workers.WebhookNotifierTask{
+					WebhookURL: cfg.Webhook.URL,
+					SecretKey:  cfg.Webhook.SecretKey,
+				}
+				if err := dispatcher.Register(webhookNotifier); err != nil {
+					log.Printf("Warning: Failed to register webhook_notifier: %v", err)
+				}
+			}
+			log.Println("Sub-task handlers registered for dispatch")
+		}
+	} else {
+		log.Printf("Initializing sub-task dispatcher (type=%s)...", cfg.SubTaskDispatch.Type)
+		subTaskDispatcher, _ = createSubTaskDispatcher(cfg, webhookConfigured)
+	}
+
+	// Create envelope queue that uses sub-task dispatcher
+	queue := createQueue(subTaskDispatcher, webhookConfigured)
 
 	// Create sync service
 	syncService := service.NewSyncService(accountService, sessionPool, queue)
@@ -115,34 +142,35 @@ func NewSyncWorkerWithTaskmaster(cfg *workerconfig.WorkerConfig, mode string) (*
 }
 
 // createDispatcher creates a taskmaster dispatcher with mode-specific configuration.
-// Uses the new separated Dispatch and Execution config structure.
-func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerConfig, _ string) taskmaster.FullDispatcher {
+// Dispatch mode is determined by cfg.Dispatch.Type (managed, rest, machinery).
+// Execution config controls worker pool settings for managed mode.
+func createDispatcher(cfg *workerconfig.WorkerConfig) taskmaster.FullDispatcher {
 	// Get dispatch-specific configuration
 	addr, redisURL, queueName := cfg.GetDispatchConfig()
 
-	switch mode {
-	case taskmaster.RESTMode:
+	switch cfg.Dispatch.Type {
+	case "rest":
 		return taskmaster.NewDispatcher(
-			taskmaster.WithMode(mode),
+			taskmaster.WithMode(taskmaster.RESTMode),
 			taskmaster.WithRESTConfig(&taskmaster.RESTConfig{
 				Addr:                addr,
 				BasePath:            "/api/v1/tasks",
 				EnableSyncExecution: true,
 			}),
-			taskmaster.WithLogger(&standardLogger{}),
+			taskmaster.WithLogger(logger.NewStandardLogger()),
 		)
-	case taskmaster.MachineryMode:
+	case "machinery":
 		return taskmaster.NewDispatcher(
-			taskmaster.WithMode(mode),
+			taskmaster.WithMode(taskmaster.MachineryMode),
 			taskmaster.WithMachineryConfig(&taskmaster.MachineryConfig{
 				BrokerURL:         redisURL,
 				ResultBackend:     cfg.Execution.ResultBackend,
 				DefaultQueue:      queueName,
 				DefaultRetryCount: 3,
 			}),
-			taskmaster.WithLogger(&standardLogger{}),
+			taskmaster.WithLogger(logger.NewStandardLogger()),
 		)
-	default: // ManagedMode
+	default: // managed
 		workerCount := cfg.Execution.WorkerCount
 		if workerCount <= 0 {
 			workerCount = 2
@@ -156,24 +184,12 @@ func createDispatcher(mode taskmaster.ExecutionMode, cfg *workerconfig.WorkerCon
 			queueSize = 100
 		}
 		return taskmaster.NewDispatcher(
-			taskmaster.WithMode(mode),
+			taskmaster.WithMode(taskmaster.ManagedMode),
 			taskmaster.WithWorkerCount(workerCount),
 			taskmaster.WithTaskTimeout(taskTimeout),
 			taskmaster.WithQueueSize(queueSize),
-			taskmaster.WithLogger(&standardLogger{}),
+			taskmaster.WithLogger(logger.NewStandardLogger()),
 		)
-	}
-}
-
-// toTaskmasterMode converts string mode to taskmaster.ExecutionMode
-func toTaskmasterMode(mode string) taskmaster.ExecutionMode {
-	switch mode {
-	case "rest":
-		return taskmaster.RESTMode
-	case "machinery":
-		return taskmaster.MachineryMode
-	default:
-		return taskmaster.ManagedMode // scheduled_managed
 	}
 }
 
@@ -326,6 +342,89 @@ func (w *SyncWorkerWithTaskmaster) Stop() error {
 	return nil
 }
 
+// shouldReuseDispatcher returns true if sub-task dispatch can reuse the main dispatcher.
+// This avoids creating duplicate Machinery instances when config is the same.
+func shouldReuseDispatcher(cfg *workerconfig.WorkerConfig) bool {
+	// Must be same type
+	if cfg.SubTaskDispatch.Type != cfg.Dispatch.Type {
+		return false
+	}
+
+	// For machinery, check if Redis URL and queue match
+	if cfg.Dispatch.Type == "machinery" {
+		_, dispatchRedisURL, dispatchQueue := cfg.GetDispatchConfig()
+		subTaskRedisURL, subTaskQueue, _, _, _ := cfg.GetSubTaskDispatchConfig()
+
+		// Reuse if Redis URL and queue name match
+		return dispatchRedisURL == subTaskRedisURL && dispatchQueue == subTaskQueue
+	}
+
+	// For rest mode, always reuse (sub-tasks use same HTTP endpoints)
+	if cfg.Dispatch.Type == "rest" {
+		return true
+	}
+
+	// For managed mode, always reuse (direct function calls)
+	return true
+}
+
+// createSubTaskDispatcher creates a dispatcher for envelope sub-tasks.
+// Sub-tasks use a separate configuration to allow different scaling than main sync tasks.
+// Returns the dispatcher and whether tasks were registered.
+func createSubTaskDispatcher(cfg *workerconfig.WorkerConfig, webhookConfigured bool) (taskmaster.FullDispatcher, bool) {
+	redisURL, queueName, _, _, _ := cfg.GetSubTaskDispatchConfig()
+	tasksRegistered := false
+
+	switch cfg.SubTaskDispatch.Type {
+	case "machinery":
+		log.Printf("Sub-task dispatch: machinery (redis=%s, queue=%s)", redisURL, queueName)
+		dispatcher := taskmaster.NewDispatcher(
+			taskmaster.WithMode(taskmaster.MachineryMode),
+			taskmaster.WithMachineryConfig(&taskmaster.MachineryConfig{
+				BrokerURL:         redisURL,
+				ResultBackend:     redisURL, // Use same Redis for results
+				DefaultQueue:      queueName,
+				DefaultRetryCount: 3,
+			}),
+			taskmaster.WithDispatchOnly(true), // Dispatch-only mode (no local worker)
+			taskmaster.WithLogger(logger.NewStandardLogger()),
+		)
+		// Start the dispatcher to initialize the Machinery server
+		if err := dispatcher.Start(context.Background()); err != nil {
+			log.Printf("Warning: Failed to start sub-task dispatcher: %v", err)
+		}
+		// Register tasks for dispatch-only (they execute on remote workers)
+		if err := dispatcher.Register(&workers.EnvelopeProcessorTask{}); err != nil {
+			log.Printf("Warning: Failed to register envelope_processor: %v", err)
+		} else {
+			tasksRegistered = true
+		}
+		if webhookConfigured {
+			webhookNotifier := &workers.WebhookNotifierTask{
+				WebhookURL: cfg.Webhook.URL,
+				SecretKey:  cfg.Webhook.SecretKey,
+			}
+			if err := dispatcher.Register(webhookNotifier); err != nil {
+				log.Printf("Warning: Failed to register webhook_notifier: %v", err)
+			} else {
+				tasksRegistered = true
+			}
+		}
+		log.Println("Sub-task handlers registered for dispatch")
+		return dispatcher, tasksRegistered
+	default: // managed - direct dispatch
+		log.Println("Sub-task dispatch: managed (direct function calls)")
+		// For managed mode, we use a minimal dispatcher that executes tasks directly
+		return taskmaster.NewDispatcher(
+			taskmaster.WithMode(taskmaster.ManagedMode),
+			taskmaster.WithWorkerCount(1), // Single worker for direct dispatch
+			taskmaster.WithTaskTimeout(5*time.Minute),
+			taskmaster.WithQueueSize(1000), // Larger queue for burst handling
+			taskmaster.WithLogger(logger.NewStandardLogger()),
+		), false
+	}
+}
+
 func createQueue(dispatcher taskmaster.TaskDispatcher, webhookConfigured bool) envelopequeue.EnvelopeQueue {
 	// Configure envelope processing pipeline with all workers EXCEPT sync.
 	// Sync task fetches envelopes and enqueues them for processing.
@@ -393,25 +492,6 @@ func createStore(cfg *workerconfig.WorkerConfig) (store.AccountStore, error) {
 	}
 
 	return accountStore, err
-}
-
-// standardLogger adapts the standard log package to the taskmaster.Logger interface.
-type standardLogger struct{}
-
-func (l *standardLogger) Info(msg string, keysAndValues ...interface{}) {
-	log.Printf("[INFO] %s %v", msg, keysAndValues)
-}
-
-func (l *standardLogger) Error(msg string, keysAndValues ...interface{}) {
-	log.Printf("[ERROR] %s %v", msg, keysAndValues)
-}
-
-func (l *standardLogger) Debug(msg string, keysAndValues ...interface{}) {
-	log.Printf("[DEBUG] %s %v", msg, keysAndValues)
-}
-
-func (l *standardLogger) Warn(msg string, keysAndValues ...interface{}) {
-	log.Printf("[WARN] %s %v", msg, keysAndValues)
 }
 
 func main() {

@@ -46,6 +46,14 @@ func (t *SyncTask) ID() string {
 func (t *SyncTask) Execute(ctx context.Context, payload []byte) error {
 	startTime := time.Now()
 
+	// Check context before starting
+	select {
+	case <-ctx.Done():
+		fmt.Printf("Sync task cancelled before starting for payload: %s\n", string(payload))
+		return ctx.Err()
+	default:
+	}
+
 	// Parse payload
 	var req SyncPayload
 	if err := json.Unmarshal(payload, &req); err != nil {
@@ -84,7 +92,13 @@ func (t *SyncTask) Execute(ctx context.Context, payload []byte) error {
 		result, err = t.SyncService.SyncAccount(ctx, req.AccountID, opts)
 	}
 
+	// Check if error is due to context cancellation
 	if err != nil {
+		if ctx.Err() != nil {
+			fmt.Printf("Sync interrupted by shutdown for account %s (duration: %v)\n",
+				req.AccountID, time.Since(startTime))
+			return fmt.Errorf("sync cancelled: %w", ctx.Err())
+		}
 		return taskmaster.WrapError(t.ID(), "sync failed", err)
 	}
 

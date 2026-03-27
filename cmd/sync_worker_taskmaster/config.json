@@ -15,6 +15,14 @@
     "redis_url": "${REDIS_URL:-redis://localhost:6379}",
     "result_backend": "${RESULT_BACKEND:-redis://localhost:6379}"
   },
+  "sub_task_dispatch": {
+    "type": "${SUB_TASK_DISPATCH_TYPE:-managed}",
+    "redis_url": "${REDIS_URL:-redis://localhost:6379}",
+    "queue_name": "${SUB_TASK_QUEUE_NAME:-envelope_tasks}",
+    "high_priority": "${ENVELOPE_HIGH_PRIORITY:-envelope_high}",
+    "normal_priority": "${ENVELOPE_NORMAL_PRIORITY:-envelope_normal}",
+    "low_priority": "${ENVELOPE_LOW_PRIORITY:-envelope_low}"
+  },
   "scheduler": {
     "enabled": true,
     "schedule_accounts": true

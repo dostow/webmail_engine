@@ -32,6 +32,7 @@ type MachineryDispatcher struct {
 	consumerTag  string
 	stopChan     chan struct{}
 	taskRegistry map[string]interface{}
+	dispatchOnly bool // If true, allows dispatch without starting worker (push-only mode)
 }
 
 // NewMachineryDispatcher creates a new Machinery dispatcher.
@@ -61,6 +62,42 @@ func (d *MachineryDispatcher) Start(ctx context.Context) error {
 		return NewSystemTaskError("", "machinery config not provided", nil)
 	}
 
+	// Initialize server
+	if err := d.initServer(); err != nil {
+		return err
+	}
+
+	// Set custom logger to route Machinery logs through our logger
+	log.Set(&machineryLogger{logger: d.logger})
+
+	// Register all tasks with Machinery
+	for taskID, task := range d.tasks {
+		if err := d.registerTaskWithMachinery(taskID, task); err != nil {
+			return fmt.Errorf("failed to register task %s: %w", taskID, err)
+		}
+	}
+
+	// Create worker with concurrency (skip in dispatch-only mode)
+	if !d.dispatchOnly {
+		if err := d.initWorker(); err != nil {
+			return err
+		}
+	}
+
+	d.running = true
+	d.logger.Info("Machinery dispatcher started successfully",
+		"dispatch_only", d.dispatchOnly)
+
+	return nil
+}
+
+// initServer creates the Machinery server without starting the worker.
+// This is used for dispatch-only mode where we only push tasks to the queue.
+func (d *MachineryDispatcher) initServer() error {
+	if d.server != nil {
+		return nil // Already initialized
+	}
+
 	d.logger.Info("Initializing Machinery v2 server",
 		"broker", d.config.MachineryConfig.BrokerURL,
 		"backend", d.config.MachineryConfig.ResultBackend)
@@ -82,9 +119,6 @@ func (d *MachineryDispatcher) Start(ctx context.Context) error {
 	}
 	d.server = server
 
-	// Set custom logger to route Machinery logs through our logger
-	log.Set(&machineryLogger{logger: d.logger})
-
 	// Register all tasks with Machinery
 	for taskID, task := range d.tasks {
 		if err := d.registerTaskWithMachinery(taskID, task); err != nil {
@@ -92,8 +126,16 @@ func (d *MachineryDispatcher) Start(ctx context.Context) error {
 		}
 	}
 
+	return nil
+}
+
+// initWorker creates and starts the Machinery worker.
+func (d *MachineryDispatcher) initWorker() error {
+	// Set custom logger
+	log.Set(&machineryLogger{logger: d.logger})
+
 	// Create worker with concurrency
-	d.worker = server.NewWorker(d.consumerTag, d.config.WorkerCount)
+	d.worker = d.server.NewWorker(d.consumerTag, d.config.WorkerCount)
 
 	// Set up pre-task handler for logging
 	d.worker.SetPreTaskHandler(func(signature *tasks.Signature) {
@@ -129,9 +171,6 @@ func (d *MachineryDispatcher) Start(ctx context.Context) error {
 			}
 		}
 	}()
-
-	d.running = true
-	d.logger.Info("Machinery dispatcher started successfully")
 
 	return nil
 }
@@ -189,8 +228,17 @@ func (d *MachineryDispatcher) Dispatch(ctx context.Context, taskID string, paylo
 		return fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
 	}
 
-	if !d.running {
-		return ErrDispatcherNotStarted
+	// Check if dispatcher is ready
+	// In dispatch-only mode, we only need the server (no worker needed)
+	// In normal mode, we need the dispatcher to be running
+	if d.dispatchOnly {
+		if d.server == nil {
+			return ErrDispatcherNotStarted
+		}
+	} else {
+		if !d.running {
+			return ErrDispatcherNotStarted
+		}
 	}
 
 	// Create Machinery signature

@@ -89,4 +89,8 @@ type AccountStore interface {
 	GetAccountProcessorConfigs(ctx context.Context, accountID string) ([]models.AccountProcessorConfig, error)
 	UpdateAccountProcessorConfigs(ctx context.Context, accountID string, configs []models.AccountProcessorConfig) error
 	EnableAccountProcessor(ctx context.Context, accountID, processorType string, enabled bool) error
+
+	// RunManualMigrations runs database migrations manually.
+	// This can be called to apply schema changes and new indexes.
+	RunManualMigrations() error
 }

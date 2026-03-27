@@ -39,8 +39,50 @@ func (l *defaultLogger) Warn(msg string, keysAndValues ...interface{}) {
 }
 
 func (l *defaultLogger) log(level, msg string, keysAndValues ...interface{}) {
-	prefix := fmt.Sprintf("[%s] %s: ", level, time.Now().Format(time.RFC3339))
-	log.Print(prefix, msg, fmt.Sprint(keysAndValues...))
+	prefix := fmt.Sprintf("[%s] %s: %s", level, time.Now().Format(time.RFC3339), msg)
+
+	if len(keysAndValues) == 0 {
+		log.Print(prefix)
+		return
+	}
+
+	// Format key-value pairs properly
+	kvStr := formatKeyValuePairs(keysAndValues)
+	log.Printf("%s %s", prefix, kvStr)
+}
+
+// formatKeyValuePairs formats key-value pairs in a readable "key=value" format.
+// If the number of keysAndValues is odd, the last value is printed as-is.
+func formatKeyValuePairs(keysAndValues []interface{}) string {
+	if len(keysAndValues) == 0 {
+		return ""
+	}
+
+	result := make([]string, 0, len(keysAndValues)/2+1)
+
+	for i := 0; i < len(keysAndValues); i += 2 {
+		if i+1 < len(keysAndValues) {
+			// We have both key and value
+			result = append(result, fmt.Sprintf("%v=%v", keysAndValues[i], keysAndValues[i+1]))
+		} else {
+			// Odd number of arguments, print the last one as-is
+			result = append(result, fmt.Sprintf("%v", keysAndValues[i]))
+		}
+	}
+
+	return fmt.Sprintf("[%s]", joinStrings(result, " "))
+}
+
+// joinStrings joins a slice of strings with the given separator.
+func joinStrings(strs []string, sep string) string {
+	if len(strs) == 0 {
+		return ""
+	}
+	result := strs[0]
+	for _, s := range strs[1:] {
+		result += sep + s
+	}
+	return result
 }
 
 // DispatcherImpl is the core dispatcher implementation.
@@ -111,6 +153,15 @@ func WithMachineryConfig(cfg *MachineryConfig) Option {
 func WithLogger(logger Logger) Option {
 	return func(d *DispatcherImpl) {
 		d.logger = logger
+	}
+}
+
+// WithDispatchOnly sets the dispatcher to dispatch-only mode for Machinery mode.
+// In this mode, the dispatcher can send tasks to the Machinery queue but won't
+// consume tasks locally (no worker started). Useful for push-only scenarios.
+func WithDispatchOnly(dispatchOnly bool) Option {
+	return func(d *DispatcherImpl) {
+		d.config.DispatchOnly = dispatchOnly
 	}
 }
 
@@ -503,6 +554,7 @@ func (d *DispatcherImpl) dispatchREST(ctx context.Context, taskID string, payloa
 // startMachineryMode initializes the Machinery v2 integration.
 func (d *DispatcherImpl) startMachineryMode(ctx context.Context) error {
 	d.machineryDispatcher = NewMachineryDispatcher(d.tasks, d.config, d.logger)
+	d.machineryDispatcher.dispatchOnly = d.config.DispatchOnly
 	return d.machineryDispatcher.Start(ctx)
 }
 

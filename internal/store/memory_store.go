@@ -580,5 +580,10 @@ func (s *MemoryStore) EnableAccountProcessor(ctx context.Context, accountID, pro
 	return nil
 }
 
+// RunManualMigrations is a no-op for memory store (no persistent schema)
+func (s *MemoryStore) RunManualMigrations() error {
+	return nil
+}
+
 // Ensure MemoryStore implements AccountStore interface
 var _ AccountStore = (*MemoryStore)(nil)

@@ -81,7 +81,7 @@ type accountDB struct {
 	ID               string     `gorm:"primaryKey;type:text;not null"`
 	Email            string     `gorm:"uniqueIndex;type:text;not null"`
 	AuthType         string     `gorm:"type:text;not null"`
-	Status           string     `gorm:"type:text;not null"`
+	Status           string     `gorm:"type:text;not null;index:idx_accounts_status"`
 	IMAPHost         string     `gorm:"column:imap_host;type:text;not null"`
 	IMAPPort         int        `gorm:"column:imap_port;not null"`
 	IMAPEncryption   string     `gorm:"column:imap_encryption;type:text;not null"`
@@ -97,9 +97,9 @@ type accountDB struct {
 	ProxyConfig      JSONBlob   `gorm:"column:proxy_config;type:text"`
 	FairUsePolicy    JSONBlob   `gorm:"column:fair_use_policy;type:text"`
 	ProcessorConfigs JSONBlob   `gorm:"column:processor_configs;type:text"`
-	CreatedAt        time.Time  `gorm:"column:created_at;not null"`
-	UpdatedAt        time.Time  `gorm:"column:updated_at;not null"`
-	LastSyncAt       *time.Time `gorm:"column:last_sync_at"`
+	CreatedAt        time.Time  `gorm:"column:created_at;not null;index"`
+	UpdatedAt        time.Time  `gorm:"column:updated_at;not null;index"`
+	LastSyncAt       *time.Time `gorm:"column:last_sync_at;index"`
 }
 
 // TableName specifies the table name
@@ -124,14 +124,14 @@ func (auditLogDB) TableName() string {
 
 // folderSyncStateDB is the GORM model for folder sync state persistence
 type folderSyncStateDB struct {
-	AccountID     string    `gorm:"primaryKey;type:text;not null"`
-	FolderName    string    `gorm:"primaryKey;type:text;not null"`
+	AccountID     string    `gorm:"primaryKey;type:text;not null;index:idx_folder_sync_account_folder"`
+	FolderName    string    `gorm:"primaryKey;type:text;not null;index:idx_folder_sync_account_folder"`
 	UIDValidity   uint32    `gorm:"column:uid_validity;not null"`
 	LastSyncedUID uint32    `gorm:"column:last_synced_uid;not null"`
-	LastSyncTime  time.Time `gorm:"column:last_sync_time;not null"`
+	LastSyncTime  time.Time `gorm:"column:last_sync_time;not null;index"`
 	MessageCount  uint32    `gorm:"column:message_count;not null"`
 	IsInitialized bool      `gorm:"column:is_initialized;not null"`
-	UpdatedAt     time.Time `gorm:"column:updated_at;not null"`
+	UpdatedAt     time.Time `gorm:"column:updated_at;not null;index"`
 }
 
 func (folderSyncStateDB) TableName() string {
@@ -377,18 +377,26 @@ func NewSQLStore(cfg config.SQLConfig) (*SQLStore, error) {
 
 // runMigrations runs GORM auto migrations
 func (s *SQLStore) runMigrations() error {
+	return s.RunManualMigrations()
+}
+
+// RunManualMigrations runs GORM auto migrations and creates indexes.
+// This can be called manually to apply schema changes and new indexes.
+func (s *SQLStore) RunManualMigrations() error {
 	// GORM AutoMigrate handles schema creation and updates
+	// Indexes defined in struct tags are automatically created
 	if err := s.db.AutoMigrate(&accountDB{}, &auditLogDB{}, &folderSyncStateDB{}); err != nil {
 		return fmt.Errorf("failed to auto migrate: %w", err)
 	}
 
 	// Create additional indexes for better query performance
+	// Note: Some indexes are now defined in struct tags (e.g., idx_accounts_status, idx_folder_sync_account_folder)
+	// This list is for indexes that need custom configuration
 	indexes := []struct {
 		name  string
 		field string
 	}{
 		{"idx_accounts_email", "email"},
-		{"idx_accounts_status", "status"},
 		{"idx_accounts_created_at", "created_at"},
 	}
 

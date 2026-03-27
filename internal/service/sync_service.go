@@ -40,6 +40,7 @@ type SyncService struct {
 	accountService *AccountService
 	sessionPool    *pool.IMAPSessionPool
 	queue          envelopequeue.EnvelopeQueue
+	folderLocks    sync.Map // map[string]*sync.Mutex - prevents concurrent sync on same folder
 }
 
 // NewSyncService creates a new SyncService.
@@ -52,7 +53,19 @@ func NewSyncService(
 		accountService: accountService,
 		sessionPool:    sessionPool,
 		queue:          queue,
+		folderLocks:    sync.Map{},
 	}
+}
+
+// getFolderLock returns a mutex for the given account/folder combination.
+func (s *SyncService) getFolderLock(accountID, folderName string) *sync.Mutex {
+	key := accountID + "/" + folderName
+	if lock, ok := s.folderLocks.Load(key); ok {
+		return lock.(*sync.Mutex)
+	}
+	newLock := &sync.Mutex{}
+	actual, _ := s.folderLocks.LoadOrStore(key, newLock)
+	return actual.(*sync.Mutex)
 }
 
 // SyncAccount performs synchronization for an entire account.
@@ -214,6 +227,15 @@ func (s *SyncService) GetSyncState(ctx context.Context, accountID, folderName st
 
 // syncFolder synchronizes a single folder and enqueues envelopes.
 func (s *SyncService) syncFolder(ctx context.Context, accountID string, client *pool.IMAPAdapter, folderName string, opts SyncOptions) (int, error) {
+	// Acquire per-folder lock to prevent concurrent sync on same folder
+	lock := s.getFolderLock(accountID, folderName)
+	if !lock.TryLock() {
+		// Another sync is already running for this folder, skip
+		log.Printf("Sync already in progress for %s/%s, skipping", accountID, folderName)
+		return 0, nil
+	}
+	defer lock.Unlock()
+
 	// Get cached sync state
 	cachedState, err := s.accountService.GetFolderSyncState(ctx, accountID, folderName)
 	if err != nil && !store.IsNotFound(err) {
@@ -257,6 +279,14 @@ func (s *SyncService) fullSyncFolder(ctx context.Context, accountID string, clie
 		return s.updateFolderSyncState(ctx, accountID, folderName, status, 0)
 	}
 
+	// Check for context cancellation before starting full sync
+	select {
+	case <-ctx.Done():
+		log.Printf("Sync cancelled for %s/%s before full sync", accountID, folderName)
+		return 0, ctx.Err()
+	default:
+	}
+
 	// Fetch all messages in batches
 	return s.syncUIDRange(ctx, accountID, client, folderName, 1, status.UIDNext-1, status, opts)
 }
@@ -270,6 +300,15 @@ func (s *SyncService) incrementalSync(ctx context.Context, accountID string, cli
 		return 0, nil
 	}
 
+	// Check for context cancellation before starting incremental sync
+	select {
+	case <-ctx.Done():
+		log.Printf("Sync cancelled for %s/%s before incremental sync (range %d:%d)",
+			accountID, folderName, fromUID, toUID)
+		return 0, ctx.Err()
+	default:
+	}
+
 	log.Printf("Incremental sync for %s/%s (UID range: %d:%d)", accountID, folderName, fromUID, toUID)
 	return s.syncUIDRange(ctx, accountID, client, folderName, fromUID, toUID, status, opts)
 }
@@ -280,6 +319,15 @@ func (s *SyncService) initialSyncFolder(ctx context.Context, accountID string, c
 
 	if status.Messages == 0 {
 		return s.updateFolderSyncState(ctx, accountID, folderName, status, 0)
+	}
+
+	// Check for context cancellation before fetching UIDs
+	select {
+	case <-ctx.Done():
+		log.Printf("Sync cancelled for %s/%s during initial sync setup",
+			accountID, folderName)
+		return 0, ctx.Err()
+	default:
 	}
 
 	// Calculate limit based on historical scope
@@ -314,6 +362,15 @@ func (s *SyncService) initialSyncFolder(ctx context.Context, accountID string, c
 
 // syncUIDRange fetches messages in a UID range and enqueues envelopes.
 func (s *SyncService) syncUIDRange(ctx context.Context, accountID string, client *pool.IMAPAdapter, folderName string, fromUID, toUID uint32, status *pool.FolderStatus, opts SyncOptions) (int, error) {
+	// Check for context cancellation before starting UID search
+	select {
+	case <-ctx.Done():
+		log.Printf("Sync cancelled for %s/%s before UID search (range %d:%d)",
+			accountID, folderName, fromUID, toUID)
+		return 0, ctx.Err()
+	default:
+	}
+
 	// Search for UIDs in range
 	searchCriteria := fmt.Sprintf("UID %d:%d", fromUID, toUID)
 	uids, err := client.Search(searchCriteria)
@@ -340,6 +397,15 @@ func (s *SyncService) enqueueEnvelopes(ctx context.Context, accountID, folderNam
 	enqueued := 0
 
 	for i := 0; i < len(uids); i += envelopeBatchSize {
+		// Check for context cancellation before processing each batch
+		select {
+		case <-ctx.Done():
+			log.Printf("Sync cancelled for %s/%s during envelope enqueueing (processed %d/%d UIDs)",
+				accountID, folderName, count, len(uids))
+			return count, ctx.Err()
+		default:
+		}
+
 		end := i + envelopeBatchSize
 		if end > len(uids) {
 			end = len(uids)
